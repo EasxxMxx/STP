@@ -1517,7 +1517,7 @@ class studentController extends Controller
             $request->validate([
                 'programName' => 'string',
                 'transcriptCategory' => 'required|integer',
-                'cgpa' => 'required|numeric'
+                'cgpa' => 'nullable|numeric'
             ]);
 
             $createCgpa = stp_cgpa::create([
@@ -1550,7 +1550,7 @@ class studentController extends Controller
             $request->validate([
                 'cgpaId' => 'required|integer',
                 'programName' => "string",
-                'cgpa' => 'required|numeric'
+                'cgpa' => 'nullable|numeric'
             ]);
 
 
@@ -1584,6 +1584,7 @@ class studentController extends Controller
             ]);
             $list = stp_cgpa::where('student_id', $authUser->id)
                 ->where('transcript_category', $request->transcriptCategory)
+                ->where('cgpa_status', true)
                 ->first();
 
             return response()->json([
@@ -3588,6 +3589,7 @@ class studentController extends Controller
                     ->get();
                 $getCGPA = stp_cgpa::where('transcript_category', $higherTranscript->id)
                     ->where('student_id', $authUser->id)
+                    ->where('cgpa_status', true)
                     ->first();
 
 
@@ -3614,6 +3616,7 @@ class studentController extends Controller
                 $documents[] = $getHigherTranscriptMedia;
                 $result['program_name'] = $getCGPA->program_name ?? null;
                 $result['cgpa'] = $getCGPA->cgpa ?? null;
+                $result['cgpaId'] = $getCGPA->id ?? null;
                 $result['subject'] = $subjects;
 
                 $result['document'] = $documents;

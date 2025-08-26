@@ -43,6 +43,7 @@ use Illuminate\Validation\ValidationException;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 use App\Rules\UniqueInArray;
@@ -1455,32 +1456,36 @@ class studentController extends Controller
 
             $authUser = Auth::user();
             $studentID = $authUser->id;
-            $checkingCourse = stp_submited_form::where('courses_id', $request->courseID)
-                ->where('student_id', $studentID)
-                ->first();
+            $courseID = $request->courseID;
+            // Use database transaction to ensure atomicity
+            $newApplicant = DB::transaction(function () use ($studentID, $courseID, $authUser) {
+                // Use lockForUpdate to prevent race conditions
+                $checkingCourse = stp_submited_form::where('courses_id', $courseID)
+                    ->where('student_id', $studentID)
+                    ->lockForUpdate()
+                    ->first();
 
-            if ($checkingCourse != null) {
-                if ($checkingCourse->form_status == 2) {
-                    throw ValidationException::withMessages([
-                        "courses" => ['You had already Applied this course']
-                    ]);
+                if ($checkingCourse != null) {
+                    if ($checkingCourse->form_status == 2) {
+                        throw ValidationException::withMessages([
+                            "courses" => ['You had already Applied this course']
+                        ]);
+                    } else {
+                        $checkingCourse->update([
+                            'form_status' => 2,
+                        ]);
+                        return $checkingCourse;
+                    }
                 } else {
-                    $checkingCourse->update([
+                    return stp_submited_form::create([
+                        'student_id' => $studentID,
+                        'courses_id' => $courseID,
                         'form_status' => 2,
+                        'created_by' => $authUser->id,
+                        'created_at' => now(),
                     ]);
-                    $newApplicant = $checkingCourse;
                 }
-            } else {
-
-                $newApplicant = stp_submited_form::create([
-                    'student_id' => $studentID,
-                    'courses_id' => $request->courseID,
-                    'form_status' => 2,
-                    'created_by' => $authUser->id,
-                    'created_at' => now(),
-                ]);
-            }
-
+            });
 
             if ($newApplicant->course->school->id == 115 || $newApplicant->course->school->id == 118) {
                 $this->serviceFunctionController->notifyAdminCustomSchoolApplication($request->courseID, $authUser);
@@ -3783,6 +3788,81 @@ class studentController extends Controller
             );
         }
     }
+
+    public function addUpdateInterestedCourse(Request $request)
+    {
+        try {
+            $authUser = Auth::user();
+            if (!$authUser) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'User is not authenticated',
+                ], 401);
+            }
+            
+            // Example log with user info
+            Log::info('User is adding/updating interested course', [
+                'user_id' => $authUser->id,
+                'request_data' => $request->all(),
+            ]);  
+
+            // Validate the request
+            $request->validate([
+                'student_id' => 'required|integer',
+                'course_id' => 'required|integer',
+            ]);
+
+            // Check if this interest already exists
+            $existingInterest = stp_courseInterest::where('student_id', $request->student_id)
+                ->where('course_id', $request->course_id)
+                ->first();
+
+            if ($existingInterest) {
+                // If exists, update the status to 1
+                $updated = $existingInterest->update([
+                    'status' => 1,
+                    'updated_by' => auth()->id()
+                ]);
+
+                $message = 'Course interest updated successfully';
+            } else {
+                // If doesn't exist, create new record
+                $created = stp_courseInterest::create([
+                    'student_id' => $request->student_id,
+                    'course_id' => $request->course_id,
+                    'created_by' => auth()->id(),
+                    'status' => 1,
+                ]);
+
+                $message = 'Course interest created successfully';
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => $message]
+            ]);
+
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation Error',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            \Log::error('Error in addUpdateInterestedCourse:', [
+                'student_id' => $request->student_id ?? null,
+                'course_id' => $request->course_id ?? null,
+                'error' => $e->getMessage()
+            ]);
+            
+            return response()->json([
+                'success' => false, 
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function removeInterestedCourse(Request $request)
     {
         try {
@@ -3807,8 +3887,7 @@ class studentController extends Controller
 
             // Find the interest record by course_id and the authenticated user's ID
             $interest = stp_courseInterest::where('course_id', $request->course_id)
-                ->where('student_id', $authUser->id)
-                ->first();
+                ->where('student_id', $authUser->id);
 
             // Check if the interest exists
             if (!$interest) {

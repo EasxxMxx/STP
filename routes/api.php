@@ -84,6 +84,7 @@ Route::prefix('student')->group(function () {
 
     //interested course
     Route::middleware('auth:sanctum')->post('/addInterestedCourse', [studentController::class, 'addInterestedCourse']);
+    Route::middleware('auth:sanctum')->post('/addUpdateInterestedCourse', [studentController::class, 'addUpdateInterestedCourse']);
     Route::middleware('auth:sanctum')->post('/removeInterestedCourse', [studentController::class, 'removeInterestedCourse']);
     Route::middleware('auth:sanctum')->get('/interestedCourseList', [studentController::class, 'interestedCourseList']);
 

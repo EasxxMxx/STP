@@ -1460,22 +1460,38 @@ class studentController extends Controller
             // Use database transaction to ensure atomicity
             $newApplicant = DB::transaction(function () use ($studentID, $courseID, $authUser) {
                 // Use lockForUpdate to prevent race conditions
+
+                // check if there is already an applicant with this course id, student id and status as pending
                 $checkingCourse = stp_submited_form::where('courses_id', $courseID)
                     ->where('student_id', $studentID)
+                    ->whereIn('form_status', [2, 5, 6])
                     ->lockForUpdate()
                     ->first();
 
+                // form status 2 = pending
+                // form status 3 = rejected
+                // form status 4 = accepted
+
+                // form status 0 = disable/soft delete
+                // form status 1 = active
+
                 if ($checkingCourse != null) {
-                    if ($checkingCourse->form_status == 2) {
-                        throw ValidationException::withMessages([
-                            "courses" => ['You had already Applied this course']
-                        ]);
-                    } else {
-                        $checkingCourse->update([
-                            'form_status' => 2,
-                        ]);
-                        return $checkingCourse;
-                    }
+                    // if form_status == 3 or 4, create new record
+                    // else throw error 'You had already Applied this course'
+                    throw ValidationException::withMessages([
+                        "courses" => ['You had already Applied this course']
+                    ]);
+
+                    // if ($checkingCourse->form_status == 2) {
+                    //     throw ValidationException::withMessages([
+                    //         "courses" => ['You had already Applied this course']
+                    //     ]);
+                    // } else {
+                    //     $checkingCourse->update([
+                    //         'form_status' => 2,
+                    //     ]);
+                    //     return $checkingCourse;
+                    // }
                 } else {
                     return stp_submited_form::create([
                         'student_id' => $studentID,

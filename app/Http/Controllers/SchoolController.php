@@ -78,20 +78,24 @@ class SchoolController extends Controller
 
         try {
             $authUser = Auth::user();
-
             $courseList = stp_course::query()
-                ->where('course_status', 1)
-                ->where('school_id', $authUser->id)
+                ->leftJoin('stp_course_interests', function($join) {
+                    $join->on('stp_course.id', '=', 'stp_course_interests.course_id')
+                        ->where('stp_course_interests.status', 1);
+                })
+                ->where('stp_course.course_status', 1)
+                ->where('stp_course.school_id', $authUser->id)
                 ->when($request->filled('category'), function ($query) use ($request) {
-                    $query->where('category_id', $request->category);
+                    $query->where('stp_course.category_id', $request->category);
                 })
                 ->when($request->filled('qualification'), function ($query) use ($request) {
-                    $query->where('qualification_id', $request->qualification);
+                    $query->where('stp_course.qualification_id', $request->qualification);
                 })
                 ->when($request->filled('search'), function ($query) use ($request) {
-                    $query->where('course_name', 'like', '%' . $request->search . '%');
+                    $query->where('stp_course.course_name', 'like', '%' . $request->search . '%');
                 })
-                ->orderBy('created_at', 'desc')
+                ->select('stp_course.*', 'stp_course_interests.id as interest_id')
+                ->orderBy('stp_course.created_at', 'desc')
                 ->paginate(100)
                 ->through(function ($course) {
                     $status = ($course->course_status == 1) ? "Active" : "Inactive";
@@ -110,7 +114,8 @@ class SchoolController extends Controller
                         'mode' => $course->studyMode->core_metaName ?? null,
                         'logo' => $course->course_logo ?? $course->school->school_logo,
                         'location' => $course->school->country->country_name ?? null,
-                        'institute_category' => $course->school->institueCategory->core_metaName ?? null
+                        'institute_category' => $course->school->institueCategory->core_metaName ?? null,
+                        'interest_id' => "test",
                     ];
                 });
 
@@ -674,25 +679,31 @@ class SchoolController extends Controller
             $schoolID = $authUser->id;
 
             // Validate input fields
-            $request->validate([
+            $validated = $request->validate([
                 'form_status' => 'integer|nullable',
                 'student_id' => 'integer|nullable',
                 'courses_id' => 'integer|nullable',
                 'search' => 'string|nullable',
-                'qualification_id' => 'integer|nullable'
+                'qualification_id' => 'integer|nullable',
+                'per_page' => 'string|nullable'
             ]);
+
+            // \Log::info('Validated applicantDetailInfo data:', $validated);
 
             // Get the per_page value from the request, default to 10 if not provided or empty
             $perPage = $request->filled('per_page') && $request->per_page !== ""
                 ? ($request->per_page === 'All' ? stp_submited_form::count() : (int)$request->per_page)
-                : 10;
+                : 50;
 
             // Define the custom order for form_status
             $statusOrder = [
                 2 => 'Pending',
+                5 => "In Progress",
+                6 => "Waiting Approval",
+                // 1 => 'Active',
                 4 => 'Accepted',
-                1 => 'Active',
-                3 => 'Rejected'
+                3 => 'Rejected',
+                7 => 'Withdrawn'
             ];
 
             // Fetch applicant info with student, course, award, and cocurriculum details
@@ -729,7 +740,7 @@ class SchoolController extends Controller
                     });
                 })
                 // Apply custom order sorting by form_status
-                ->orderByRaw("FIELD(form_status, 2, 4, 1, 3)")
+                ->orderByRaw("FIELD(form_status, 2, 5, 6, 4, 3, 7)")
                 ->paginate($perPage)
                 ->through(function ($applicant) use ($statusOrder) {
                     $status = $statusOrder[$applicant->form_status] ?? null;
@@ -1052,7 +1063,7 @@ class SchoolController extends Controller
             $request->validate([
                 'id' => 'required|integer',
                 'type' => 'required|string|max:255',
-                'feedback' => 'string|max:255'
+                'feedback' => 'string|max:255|nullable'
             ]);
             $authUser = Auth::user();
 
@@ -1060,22 +1071,39 @@ class SchoolController extends Controller
             if ($request->type == 'Rejected') {
                 $status = 3;
                 $message = "Successfully Rejected the Applicant";
-            } else {
+            } else if ($request->type == 'Accepted') {
                 $status = 4;
                 $message = "Successfully Accepted the Applicant";
+            }
+            if ($request->type == 'In Progress') {
+                $status = 5;
+                $message = "Successfully updated status to In Progress for the Applicant";
+            } else if ($request->type == 'Waiting Approval') {
+                $status = 6;
+                $message = "Successfully updated status to Waiting Approval for the Applicant";
             }
 
 
             $applicant = stp_submited_form::find($request->id);
 
-            $applicant->update([
+            // Base update fields
+            $updateData = [
                 'form_status' => $status,
-                'form_feedback' => $request->feedback,
                 'updated_by' => $authUser->id,
                 'updated_at' => now(),
-            ]);
+            ];
 
-            $this->serviceFunctionController->sendStudentApplicantStatusEmail($applicant, $status, $request->feedback ?? "no comment");
+            // Only include feedback if not empty
+            if (!empty($request->feedback)) {
+                $updateData['form_feedback'] = $request->feedback;
+            }
+
+            $applicant->update($updateData);
+
+            if ($status === 3 || $status === 4)
+            {
+                $this->serviceFunctionController->sendStudentApplicantStatusEmail($applicant, $status, $request->feedback ?? "no comment");
+            }
 
             return response()->json([
                 'success' => true,

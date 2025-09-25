@@ -2631,6 +2631,7 @@ class AdminController extends Controller
                 'qualification_id' => 'integer|nullable',
                 'search' => 'string|nullable',
                 'school_id' => 'integer|nullable',  // Add validation for school_id
+                'data_status' => 'integer|nullable',
             ]);
 
             // Get the per_page value, default to 10 if not provided
@@ -2642,8 +2643,12 @@ class AdminController extends Controller
             $query = stp_submited_form::with(['student.detail', 'course.school']);
 
             // Apply the form_status filter if provided
-            if ($request->filled('stat')) {
-                $query->where('form_status', $request->stat);
+            if ($request->filled('data_status')) {
+                $query->where('data_status', $request->data_status);
+            }
+
+            if ($request->filled('form_status')) {
+                $query->where('form_status', $request->form_status);
             }
 
             // Apply school_id filter if provided
@@ -2659,16 +2664,18 @@ class AdminController extends Controller
 
             if ($request->filled('search')) {
                 $searchTerm = $request->search;
+
                 $query->whereHas('student', function ($studentQuery) use ($searchTerm) {
-                    $studentQuery->where('student_userName', 'like', "%$searchTerm%")
-                        ->orWhere('student_email', 'like', "%$searchTerm%");
+                    $studentQuery->where('student_email', 'like', "%$searchTerm%")
+                        ->orWhereHas('detail', function ($detailQuery) use ($searchTerm) {
+                            $detailQuery->where('student_detailFirstName', 'like', "%$searchTerm%")
+                                ->orWhere('student_detailLastName', 'like', "%$searchTerm%");
+                        });
                 });
             }
 
             // Sort by latest date first
             $query->orderBy('created_at', 'desc');
-
-            // ... rest of your existing code ...
 
             // Fetch the filtered applicants with pagination
             $applicantInfo = $query->paginate($perPage)
@@ -2687,6 +2694,8 @@ class AdminController extends Controller
                             2 => "Pending",
                             3 => "Rejected",
                             4 => "Accepted",
+                            5 => "In Progress",
+                            6 => "Waiting Approval",
                             default => null,
                         },
                         "username" => $applicant->student->student_userName ?? 'N/A',
@@ -2697,6 +2706,11 @@ class AdminController extends Controller
                         "contact_number" => $student?->student_contactNo ?? '',
                         "student_id" => $student->id ?? 'No student ID return',
                         "created_date" => $applicant->created_at->format("d/M/y"),
+                        "data_status" => match ((int)$applicant->data_status) {
+                            0 => "Disable",
+                            1 => "Active",
+                            default => null,
+                        },
                     ];
                 });
 
@@ -3127,23 +3141,25 @@ class AdminController extends Controller
             $request->validate([
                 'id' => 'required|integer',
                 'type' => 'required|string|max:255',
-                'feedback' => 'string'
+                // 'feedback' => 'nullable|string'
             ]);
             $authUser = Auth::user();
 
-            if ($request->type == 'Active') {
+            if ($request->type === 'enable') {
                 $status = 1;
                 $message = "Successfully Set the Application Status to Active";
-            } elseif ($request->type == 'Pending') {
-                $status = 2;
-                $message = "Successfully Set the Applicantion status to Pending";
-            } elseif ($request->type == 'Reject') {
-                $status = 3;
-                $message = "Successfully Rejected the Applicant";
-            } elseif ($request->type == 'Accept') {
-                $status = 4;
-                $message = "Successfully Accepted the Applicant";
-            } elseif ($request->type == 'Delete') {
+            } 
+            // elseif ($request->type == 'Pending') {
+            //     $status = 2;
+            //     $message = "Successfully Set the Applicantion status to Pending";
+            // } elseif ($request->type == 'Reject') {
+            //     $status = 3;
+            //     $message = "Successfully Rejected the Applicant";
+            // } elseif ($request->type == 'Accept') {
+            //     $status = 4;
+            //     $message = "Successfully Accepted the Applicant";
+            // } 
+            elseif ($request->type === 'disable') {
                 $status = 0;
                 $message = "Successfully Deleted the Applicant";
             }
@@ -3152,8 +3168,8 @@ class AdminController extends Controller
             $applicant = stp_submited_form::find($request->id);
 
             $applicant->update([
-                'form_status' => $status,
-                'form_feedback' => $request->feedback,
+                'data_status' => $status,
+                // 'form_feedback' => $request->feedback,
                 'updated_by' => $authUser->id,
                 'updated_at' => now(),
 

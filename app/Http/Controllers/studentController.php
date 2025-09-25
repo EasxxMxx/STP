@@ -1640,7 +1640,7 @@ class studentController extends Controller
                 'course.school.city'
             ])
                 // Add orderBy for descending order by 'created_at'
-                ->where('form_status', 2)
+                ->whereIn('form_status', [2, 5, 6])
                 ->where('student_id', $studentID)
                 ->when($request->filled('course_name'), function ($query) use ($request) {
                     $query->whereHas('course', function ($query) use ($request) {
@@ -1669,7 +1669,7 @@ class studentController extends Controller
                         "country_name" => $school->country->country_name ?? null,
                         "state_name" => $school->state->state_name ?? null,
                         "city_name" => $school->city->city_name ?? null,
-                        "status" => "Pending",
+                        "status" => $submittedForm->form_status,
                         'student_id' => $submittedForm->student_id,
                         'feedback' => $submittedForm->form_feedback,
                         'date_applied' => $appliedDate, // Applied date in the correct format
@@ -1710,7 +1710,7 @@ class studentController extends Controller
                 'course.school.city'
 
             ])
-                ->whereIn('form_status', [0, 3, 4])
+                ->whereIn('form_status', [0, 3, 4, 7])
                 ->where('student_id', $studentID)
                 ->when($request->filled('course_name'), function ($query) use ($request) {
                     $query->whereHas('course', function ($query) use ($request) {
@@ -1728,6 +1728,7 @@ class studentController extends Controller
                         0 => "Withdrawal",
                         3 => "Rejected",
                         4 => "Accepted",
+                        7 => "Withdrawn",
                         default => "Unknown"
                     };
                     $dateTime = new \DateTime($submittedForm->created_at);
@@ -1776,7 +1777,7 @@ class studentController extends Controller
             ]);
             $applicant = stp_submited_form::find($request->id);
             $applicant->update([
-                'form_status' => 0
+                'form_status' => 7
             ]);
             return response()->json([
                 'success' => true,

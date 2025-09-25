@@ -1724,7 +1724,7 @@ class studentController extends Controller
                     $school = $course->school;
 
                     // Determine the status message based on form_status
-                    $status = match ($submittedForm->form_status) {
+                    $status = match ((int)$submittedForm->form_status) {
                         0 => "Withdrawal",
                         3 => "Rejected",
                         4 => "Accepted",

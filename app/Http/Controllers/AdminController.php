@@ -2696,6 +2696,7 @@ class AdminController extends Controller
                             4 => "Accepted",
                             5 => "In Progress",
                             6 => "Waiting Approval",
+                            7 => "Withdrawn",
                             default => null,
                         },
                         "username" => $applicant->student->student_userName ?? 'N/A',

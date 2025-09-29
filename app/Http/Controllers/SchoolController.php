@@ -80,22 +80,22 @@ class SchoolController extends Controller
             $authUser = Auth::user();
             $courseList = stp_course::query()
                 ->leftJoin('stp_course_interests', function($join) {
-                    $join->on('stp_course.id', '=', 'stp_course_interests.course_id')
+                    $join->on('stp_courses.id', '=', 'stp_course_interests.course_id')
                         ->where('stp_course_interests.status', 1);
                 })
-                ->where('stp_course.course_status', 1)
-                ->where('stp_course.school_id', $authUser->id)
+                ->where('stp_courses.course_status', 1)
+                ->where('stp_courses.school_id', $authUser->id)
                 ->when($request->filled('category'), function ($query) use ($request) {
-                    $query->where('stp_course.category_id', $request->category);
+                    $query->where('stp_courses.category_id', $request->category);
                 })
                 ->when($request->filled('qualification'), function ($query) use ($request) {
-                    $query->where('stp_course.qualification_id', $request->qualification);
+                    $query->where('stp_courses.qualification_id', $request->qualification);
                 })
                 ->when($request->filled('search'), function ($query) use ($request) {
-                    $query->where('stp_course.course_name', 'like', '%' . $request->search . '%');
+                    $query->where('stp_courses.course_name', 'like', '%' . $request->search . '%');
                 })
-                ->select('stp_course.*', 'stp_course_interests.id as interest_id')
-                ->orderBy('stp_course.created_at', 'desc')
+                ->select('stp_courses.*', 'stp_course_interests.id as interest_id')
+                ->orderBy('stp_courses.created_at', 'desc')
                 ->paginate(100)
                 ->through(function ($course) {
                     $status = ($course->course_status == 1) ? "Active" : "Inactive";

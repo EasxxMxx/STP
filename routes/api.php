@@ -299,6 +299,7 @@ Route::prefix('school')->middleware('auth:sanctum')->group(function () {
     Route::post('/addCourses', [SchoolController::class, 'addCourse']);
     Route::post('/courseDetail', [SchoolController::class, 'courseDetail']);
     Route::post('/editCourses', [SchoolController::class, 'editCourse']);
+    Route::post('/removeCourseThumbnail', [SchoolController::class, 'removeCourseThumbnail']);
     Route::post('/editCourseStatus', [SchoolController::class, 'editCourseStatus']);
 
     Route::post('/editSchool', [SchoolController::class, 'editSchoolDetail']);
@@ -392,6 +393,9 @@ Route::prefix('school')->middleware('auth:sanctum')->group(function () {
 
     Route::get('getVisitYearList', [SchoolController::class, 'getVisitMonthlyListgetVisitYearList']);
     Route::post('getVisitMonthlyList', [SchoolController::class, 'getVisitMonthlyList']);
+    
+    //reminder statistics
+    Route::get('/reminderStatistics', [SchoolController::class, 'reminderStatistics']);
 });
 
 // Route::get('auth/facebook', [LoginController::class, 'redirectToFacebook'])->name('login.facebook');

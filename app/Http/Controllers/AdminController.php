@@ -39,6 +39,7 @@ use Intervention\Image\Facades\Image as Image;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 
 
@@ -218,52 +219,107 @@ class AdminController extends Controller
     public function studentListAdmin(Request $request)
     {
         try {
-            // Get the per_page value from the request, default to 10 if not provided or empty
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_student::count() : (int)$request->per_page)
-                : 10;
+            $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,fullname,email,contact_number,created_at,status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
 
-            $query = stp_student::when($request->filled('search'), function ($query) use ($request) {
-                $query->where('student_userName', 'like', '%' . $request->search . '%');
-            })
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column ?? null;
+            $sortDirection = $request->sort_direction ?? null;
+
+            // Base query with eager loading to avoid N+1 on student details
+            $query = stp_student::with(['detail'])
+                ->when($request->filled('search'), function ($query) use ($request) {
+                    $query->where(function ($q) use ($request) {
+                        $q->where('student_userName', 'like', '%' . $request->search . '%')
+                          ->orWhere('student_email', 'like', '%' . $request->search . '%');
+                    });
+                })
                 ->when($request->filled('stat'), function ($query) use ($request) {
-                    // Add status filter
                     $query->where('student_status', $request->stat);
                 });
 
-            $totalCount = $query->count();
-            $studentList = $query->orderBy('created_at', 'desc')
-                ->paginate($perPage)
-                ->through(function ($student) {
-                    switch ($student->student_status) {
-                        case 0:
-                            $status = "Disable";
-                            break;
-                        case 1:
-                            $status = "Active";
-                            break;
-                        case 3:
-                            $status = "Temporary";
-                            break;
-                        case 4:
-                            $status = "Temporary-Disable";
-                            break;
-                        default:
-                            $status = null;
-                    }
+            // Apply DB-level sorting where possible
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('student_userName', $sortDirection);
+                } elseif ($sortColumn === 'email') {
+                    $query->orderBy('student_email', $sortDirection);
+                } elseif ($sortColumn === 'status') {
+                    $query->orderBy('student_status', $sortDirection);
+                } elseif ($sortColumn === 'contact_number') {
+                    // Sort by country code, then contact number
+                    $query->orderBy('student_countryCode', $sortDirection)
+                          ->orderBy('student_contactNo', $sortDirection);
+                } elseif ($sortColumn === 'created_at') {
+                    $query->orderBy('created_at', $sortDirection);
+                } else {
+                    // fullname sorting handled after fetch for current page
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
 
-                    return [
-                        'id' => $student->id,
-                        'name' => $student->student_userName,
-                        'fullname' => $student->detail->student_detailFirstName . " " . $student->detail->student_detailLastName,
-                        'email' => $student->student_email,
-                        'contact_number' => $student->student_countryCode . $student->student_contactNo,
-                        'created_at' => Carbon::parse($student->created_at)->format('d-m-Y H:i'),
-                        'status' => $status
-                    ];
-                });
+            // Total count for pagination UI
+            $totalCount = (clone $query)->toBase()->count();
 
-            return response()->json($studentList);
+            // Fetch only current page rows
+            $pageStudents = $query->skip($offset)->take($limit)->get();
+
+            // Map to API shape
+            $processedData = $pageStudents->map(function ($student) {
+                switch ($student->student_status) {
+                    case 0:
+                        $status = "Disable";
+                        break;
+                    case 1:
+                        $status = "Active";
+                        break;
+                    case 3:
+                        $status = "Temporary";
+                        break;
+                    case 4:
+                        $status = "Temporary-Disable";
+                        break;
+                    default:
+                        $status = null;
+                }
+
+                return [
+                    'id' => $student->id,
+                    'name' => $student->student_userName,
+                    'fullname' => trim(($student->detail->student_detailFirstName ?? '') . ' ' . ($student->detail->student_detailLastName ?? '')),
+                    'email' => $student->student_email,
+                    'contact_number' => $student->student_countryCode . $student->student_contactNo,
+                    'created_at' => Carbon::parse($student->created_at)->format('d-m-Y H:i'),
+                    'status' => $status
+                ];
+            });
+
+            // If requested, sort fullname within the current page
+            if ($sortColumn === 'fullname' && $sortDirection) {
+                $processedData = $processedData->sort(function ($a, $b) use ($sortDirection) {
+                    $aValue = strtolower($a['fullname'] ?? '');
+                    $bValue = strtolower($b['fullname'] ?? '');
+                    $result = strcmp($aValue, $bValue);
+                    return $sortDirection === 'asc' ? $result : -$result;
+                })->values();
+            }
+
+            $hasMore = ($offset + $limit) < $totalCount;
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData->all(),
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -499,14 +555,28 @@ class AdminController extends Controller
     public function schoolList(Request $request)
     {
         try {
-            // Get the per_page value from the request, default to 10 if not provided or empty
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_school::count() : (int)$request->per_page)
-                : 10;
+            $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'country' => 'nullable|integer',
+                'state' => 'nullable|integer',
+                'city' => 'nullable|integer',
+                'category' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,email,contact,category,status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
 
-            $schoolList = stp_school::when($request->filled('country'), function ($query) use ($request) {
-                $query->orWhere('country_id', $request->country);
-            })
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column ?? null;
+            $sortDirection = $request->sort_direction ?? null;
+
+            // Base query with eager loaded relations to prevent N+1
+            $query = stp_school::with(['institueCategory', 'country', 'state', 'city'])
+                ->when($request->filled('country'), function ($query) use ($request) {
+                    $query->orWhere('country_id', $request->country);
+                })
                 ->when($request->filled('state'), function ($query) use ($request) {
                     $query->orWhere('state_id', $request->state);
                 })
@@ -521,43 +591,87 @@ class AdminController extends Controller
                 })
                 ->when($request->filled('search'), function ($query) use ($request) {
                     $query->where('school_name', 'like', '%' . $request->search . '%');
-                })
-                ->orderBy('created_at', 'desc')  // Add this line to sort alphabetically
-                ->paginate($perPage)
-                ->through(function ($school) {
-                    switch ($school->school_status) {
-                        case 0:
-                            $status = "Disable";
-                            break;
-                        case 1:
-                            $status = "Active";
-                            break;
-                        case 2:
-                            $status = "Pending";
-                            break;
-                        case 3:
-                            $status = "Temporary";
-                            break;
-                        case 4:
-                            $status = "Temporary-Disable";
-                            break;
-                        default:
-                            $status = null;
-                    }
-                    return [
-                        'id' => $school->id,
-                        'name' => $school->school_name,
-                        'category' => $school->institueCategory->core_metaName ?? null,
-                        'country' => $school->country->country_name ?? null,
-                        'email' => $school->school_email,
-                        'contact' => $school->school_countryCode . $school->school_contactNo,
-                        'state' => $school->state->state_name ?? null,
-                        'city' => $school->city->city_name ?? null,
-                        'status' => $status
-                    ];
                 });
 
-            return response()->json($schoolList);
+            // Apply DB-level sorting when possible
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('school_name', $sortDirection);
+                } elseif ($sortColumn === 'email') {
+                    $query->orderBy('school_email', $sortDirection);
+                } elseif ($sortColumn === 'status') {
+                    $query->orderBy('school_status', $sortDirection);
+                } elseif ($sortColumn === 'contact') {
+                    // Approximate contact sort by country code then contact number
+                    $query->orderBy('school_countryCode', $sortDirection)
+                          ->orderBy('school_contactNo', $sortDirection);
+                } else {
+                    // category sort left for in-memory, keep natural order for DB
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                // Default latest first
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Total count before pagination
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch only current page
+            $pageSchools = $query->skip($offset)->take($limit)->get();
+
+            // Map to output shape
+            $processedData = $pageSchools->map(function ($school) {
+                switch ($school->school_status) {
+                    case 0:
+                        $status = "Disable";
+                        break;
+                    case 1:
+                        $status = "Active";
+                        break;
+                    case 2:
+                        $status = "Pending";
+                        break;
+                    case 3:
+                        $status = "Temporary";
+                        break;
+                    case 4:
+                        $status = "Temporary-Disable";
+                        break;
+                    default:
+                        $status = null;
+                }
+                return [
+                    'id' => $school->id,
+                    'name' => $school->school_name,
+                    'category' => $school->institueCategory->core_metaName ?? null,
+                    'country' => $school->country->country_name ?? null,
+                    'email' => $school->school_email,
+                    'contact' => $school->school_countryCode . $school->school_contactNo,
+                    'state' => $school->state->state_name ?? null,
+                    'city' => $school->city->city_name ?? null,
+                    'status' => $status
+                ];
+            });
+
+            // If client asked to sort by category, do it within the current page items only
+            if ($sortColumn === 'category' && $sortDirection) {
+                $processedData = $processedData->sort(function ($a, $b) use ($sortDirection) {
+                    $aValue = strtolower($a['category'] ?? '');
+                    $bValue = strtolower($b['category'] ?? '');
+                    $result = strcmp($aValue, $bValue);
+                    return $sortDirection === 'asc' ? $result : -$result;
+                })->values();
+            }
+
+            $hasMore = ($offset + $limit) < $totalCount;
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData->all(),
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -1276,7 +1390,10 @@ class AdminController extends Controller
             if ($request->hasFile('logo')) {
                 $image = $request->file('logo');
                 $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('courseLogo', $imageName, 'public'); // Store in 'storage/app/public/images'
+                // Store directly in public/storage/courseLogo/
+                $destinationPath = public_path('storage/courseLogo');
+                $image->move($destinationPath, $imageName);
+                $imagePath = 'courseLogo/' . $imageName;
             }
             $course = stp_course::create([
                 'school_id' => $request->schoolID,
@@ -1405,14 +1522,25 @@ class AdminController extends Controller
     public function courseListAdmin(Request $request)
     {
         try {
-            // Get the per_page value from the request, default to 10 if not provided or empty
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_course::count() : (int)$request->per_page)
-                : 10;
+            $request->validate([
+                'search' => 'nullable|string',
+                'school_id' => 'nullable|integer',
+                'category_id' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,school,category,qualification,status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
 
-            $courseList = stp_course::when($request->filled('search'), function ($query) use ($request) {
-                $query->where('course_name', 'like', '%' . $request->search . '%');
-            })
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column ?? null;
+            $sortDirection = $request->sort_direction ?? null;
+
+            // Base query with eager loading to avoid N+1
+            $query = stp_course::with(['school', 'category', 'qualification'])
+                ->when($request->filled('search'), function ($query) use ($request) {
+                    $query->where('course_name', 'like', '%' . $request->search . '%');
+                })
                 ->when($request->filled('school_id'), function ($query) use ($request) {
                     $query->where('school_id', $request->school_id);
                 })
@@ -1420,33 +1548,70 @@ class AdminController extends Controller
                     $query->where('category_id', $request->category_id);
                 })
                 ->whereHas('school', function ($query) {
-                    $query->whereIn('school_status', [1, 2, 3]); // Only include courses from active schools
-                })
-                ->orderBy('created_at', 'desc')
-                ->paginate($perPage)
-                ->through(function ($course) {
-                    switch ($course->course_status) {
-                        case 0:
-                            $status = "Disable";
-                            break;
-                        case 1:
-                            $status = "Active";
-                            break;
-                        default:
-                            $status = null;
-                    }
-
-                    return [
-                        'id' => $course->id,
-                        'name' => $course->course_name,
-                        'school' => $course->school->school_name,
-                        'school_status' => $course->school->school_status,
-                        "category" => $course->category->category_name,
-                        "qualification" => $course->qualification->qualification_name,
-                        "status" => $status
-                    ];
+                    $query->whereIn('school_status', [1, 2, 3]);
                 });
-            return response()->json($courseList);
+
+            // DB-level sorting where applicable
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('course_name', $sortDirection);
+                } elseif ($sortColumn === 'status') {
+                    $query->orderBy('course_status', $sortDirection);
+                } else {
+                    // For related text fields, keep default order and sort within page after mapping
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch current page
+            $pageCourses = $query->skip($offset)->take($limit)->get();
+
+            $processedData = $pageCourses->map(function ($course) {
+                switch ($course->course_status) {
+                    case 0:
+                        $status = "Disable";
+                        break;
+                    case 1:
+                        $status = "Active";
+                        break;
+                    default:
+                        $status = null;
+                }
+
+                return [
+                    'id' => $course->id,
+                    'name' => $course->course_name,
+                    'school' => $course->school->school_name,
+                    'school_status' => $course->school->school_status,
+                    "category" => $course->category->category_name,
+                    "qualification" => $course->qualification->qualification_name,
+                    "status" => $status
+                ];
+            });
+
+            // If asked to sort by school/category/qualification, sort within current page
+            if ($sortColumn && in_array($sortColumn, ['school', 'category', 'qualification'], true) && $sortDirection) {
+                $processedData = $processedData->sort(function ($a, $b) use ($sortColumn, $sortDirection) {
+                    $aValue = strtolower($a[$sortColumn] ?? '');
+                    $bValue = strtolower($b[$sortColumn] ?? '');
+                    $result = strcmp($aValue, $bValue);
+                    return $sortDirection === 'asc' ? $result : -$result;
+                })->values();
+            }
+
+            $hasMore = ($offset + $limit) < $totalCount;
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData->all(),
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -1592,16 +1757,22 @@ class AdminController extends Controller
             $course = stp_course::findOrFail($request->id);
 
             // Handle logo upload
-            $imagePath = $course->logo; // Default to current course logo
+            $imagePath = $course->course_logo; // Default to current course logo
             if ($request->hasFile('logo')) {
                 // Delete old image if it exists
-                if ($imagePath && Storage::exists('public/' . $imagePath)) {
-                    Storage::delete('public/' . $imagePath);
+                if ($imagePath) {
+                    $oldFilePath = public_path('storage/' . $imagePath);
+                    if (file_exists($oldFilePath)) {
+                        unlink($oldFilePath);
+                    }
                 }
                 // Store new image
                 $image = $request->file('logo');
                 $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('courseLogo', $imageName, 'public');
+                // Store directly in public/storage/courseLogo/
+                $destinationPath = public_path('storage/courseLogo');
+                $image->move($destinationPath, $imageName);
+                $imagePath = 'courseLogo/' . $imageName;
             }
 
             // Update course details
@@ -2398,43 +2569,92 @@ class AdminController extends Controller
         }
     }
     public function subjectListAdmin(Request $request)
-
     {
         try {
-            // Get the per_page value from the request, default to 10 if not provided or empty
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_subject::count() : (int)$request->per_page)
-                : 10;
+            $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'category' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,category,status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
 
-            $subjectList = stp_subject::when($request->filled('search'), function ($query) use ($request) {
-                $query->where('subject_name', 'like', '%' . $request->search . '%');
-            })->when($request->filled('stat'), function ($query) use ($request) {
-                $query->where('subject_status', $request->stat);
-            })->when($request->filled('category'), function ($query) use ($request) {
-                $query->where('subject_category', $request->category);
-            })
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
 
-                ->paginate($perPage)
-                ->through(function ($subject) {
-                    switch ($subject->subject_status) {
-                        case 0:
-                            $status = "Disable";
-                            break;
-                        case 1:
-                            $status = "Active";
-                            break;
-                        default:
-                            $status = null;
-                    }
-
-                    return [
-                        'id' => $subject->id,
-                        'name' => $subject->subject_name,
-                        'category' => $subject->category->core_metaName ?? '',
-                        'status' => $status
-                    ];
+            // Base query with eager load and DB-level filters
+            $query = stp_subject::with('category:id,core_metaName')
+                ->when($request->filled('search'), function ($query) use ($request) {
+                    $query->where('subject_name', 'like', '%' . $request->search . '%');
+                })
+                ->when($request->filled('stat'), function ($query) use ($request) {
+                    $query->where('subject_status', $request->stat);
+                })
+                ->when($request->filled('category'), function ($query) use ($request) {
+                    $query->where('subject_category', $request->category);
                 });
-            return response()->json($subjectList);
+
+            // DB-level sorting where possible
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('subject_name', $sortDirection);
+                } elseif ($sortColumn === 'status') {
+                    $query->orderBy('subject_status', $sortDirection);
+                } else {
+                    // category sort within page after fetch
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch current page
+            $subjects = $query->skip($offset)->take($limit)->get();
+
+            // Map to response shape
+            $processedData = $subjects->map(function ($subject) {
+                switch ($subject->subject_status) {
+                    case 0:
+                        $status = "Disable";
+                        break;
+                    case 1:
+                        $status = "Active";
+                        break;
+                    default:
+                        $status = null;
+                }
+                return [
+                    'id' => $subject->id,
+                    'name' => $subject->subject_name,
+                    'category' => $subject->category ? $subject->category->core_metaName : '',
+                    'status' => $status
+                ];
+            })->values();
+
+            // If requested, sort by category within the current page
+            if ($sortColumn === 'category' && $sortDirection) {
+                $processedData = $processedData->sort(function ($a, $b) use ($sortDirection) {
+                    $aValue = strtolower($a['category'] ?? '');
+                    $bValue = strtolower($b['category'] ?? '');
+                    $result = strcmp($aValue, $bValue);
+                    return $sortDirection === 'asc' ? $result : -$result;
+                })->values();
+            }
+
+            $hasMore = ($offset + $limit) < $totalCount;
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -2534,42 +2754,83 @@ class AdminController extends Controller
 
 
     public function categoryListAdmin(Request $request)
-
     {
         try {
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_courses_category::count() : (int)$request->per_page)
-                : 10;
+            $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,hotpick,riasecTypes,status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
 
-            $categoryList = stp_courses_category::with('riasecTypes:id,type_name')
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
+
+            // Build query with DB-level filters
+            $query = stp_courses_category::query()
                 ->when($request->filled('search'), function ($query) use ($request) {
                     $query->where('category_name', 'like', '%' . $request->search . '%');
-                })->when($request->filled('stat'), function ($query) use ($request) {
-                    $query->where('category_status', $request->stat);
                 })
-                ->orderBy('category_name', 'asc')  // Add this line to sort alphabetically by category name
-                ->paginate($perPage)
-                ->through(function ($category) {
-                    switch ($category->category_status) {
-                        case 0:
-                            $status = "Disable";
-                            break;
-                        case 1:
-                            $status = "Active";
-                            break;
-                        default:
-                            $status = null;
-                    }
-
-                    return [
-                        'id' =>  $category->id,
-                        'name' =>  $category->category_name,
-                        "course_hotPick" => $category->course_hotPick ?? 0,
-                        "riasec" => $category->riasecTypes,
-                        "category_status" => $status
-                    ];
+                ->when($request->filled('stat'), function ($query) use ($request) {
+                    $query->where('category_status', $request->stat);
                 });
-            return response()->json($categoryList);
+
+            // DB-level sorting when possible
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('category_name', $sortDirection);
+                } elseif ($sortColumn === 'status') {
+                    $query->orderBy('category_status', $sortDirection);
+                } elseif ($sortColumn === 'hotpick') {
+                    $query->orderBy('course_hotPick', $sortDirection);
+                } elseif ($sortColumn === 'riasecTypes') {
+                    $query->orderBy('riasecTypes', $sortDirection);
+                } else {
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch current page
+            $categories = $query->skip($offset)->take($limit)->get();
+
+            // Map to response shape
+            $processedData = $categories->map(function ($category) {
+                switch ($category->category_status) {
+                    case 0:
+                        $status = "Disable";
+                        break;
+                    case 1:
+                        $status = "Active";
+                        break;
+                    default:
+                        $status = null;
+                }
+
+                return [
+                    'id' => $category->id,
+                    'name' => $category->category_name,
+                    'hotpick' => (int)($category->course_hotPick ?? 0),
+                    'riasecTypes' => $category->riasecTypes ?? '',
+                    'status' => $status
+                ];
+            })->values();
+
+            $hasMore = ($offset + $limit) < $totalCount;
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -2630,95 +2891,121 @@ class AdminController extends Controller
                 'courses_id' => 'integer|nullable',
                 'qualification_id' => 'integer|nullable',
                 'search' => 'string|nullable',
-                'school_id' => 'integer|nullable',  // Add validation for school_id
+                'school_id' => 'integer|nullable',
                 'data_status' => 'integer|nullable',
+                'offset' => 'integer|nullable|min:0',
+                'sort_column' => 'nullable|string|in:student_name,course_name,institution,contact_number,created_date,form_status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
             ]);
 
-            // Get the per_page value, default to 10 if not provided
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_submited_form::count() : (int)$request->per_page)
-                : 10;
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
 
-            // Fetch the applicant information with relationships
-            $query = stp_submited_form::with(['student.detail', 'course.school']);
-
-            // Apply the form_status filter if provided
-            if ($request->filled('data_status')) {
-                $query->where('data_status', $request->data_status);
-            }
-
-            if ($request->filled('form_status')) {
-                $query->where('form_status', $request->form_status);
-            }
-
-            // Apply school_id filter if provided
-            if ($request->filled('school_id')) {
-                $query->whereHas('course.school', function ($q) use ($request) {
-                    $q->where('id', $request->school_id);
-                });
-            }
-
-            if ($request->filled('qualification_id')) {
-                $query->where('qualification_id', $request->qualification_id);
-            }
-
-            if ($request->filled('search')) {
-                $searchTerm = $request->search;
-
-                $query->whereHas('student', function ($studentQuery) use ($searchTerm) {
-                    $studentQuery->where('student_email', 'like', "%$searchTerm%")
-                        ->orWhereHas('detail', function ($detailQuery) use ($searchTerm) {
-                            $detailQuery->where('student_detailFirstName', 'like', "%$searchTerm%")
-                                ->orWhere('student_detailLastName', 'like', "%$searchTerm%");
-                        });
-                });
-            }
-
-            // Sort by latest date first
-            $query->orderBy('created_at', 'desc');
-
-            // Fetch the filtered applicants with pagination
-            $applicantInfo = $query->paginate($perPage)
-                ->through(function ($applicant) {
-                    $student = $applicant->student;
-                    $studentDetail = $student?->detail;
-
-                    return [
-                        "id" => $applicant->id ?? 'N/A',
-                        "course_name" => $applicant->course->course_name ?? 'N/A',
-                        "institution_id" => $applicant->course->school->id ?? 'N/A',
-                        "institution" => $applicant->course->school->school_name ?? 'N/A',
-                        "form_status" => match ((int)$applicant->form_status) {
-                            0 => "Disable",
-                            1 => "Active",
-                            2 => "Pending",
-                            3 => "Rejected",
-                            4 => "Accepted",
-                            5 => "In Progress",
-                            6 => "Waiting Approval",
-                            7 => "Withdrawn",
-                            default => null,
-                        },
-                        "username" => $applicant->student->student_userName ?? 'N/A',
-                        "student_name" => $studentDetail
-                            ? "{$studentDetail->student_detailFirstName} {$studentDetail->student_detailLastName}"
-                            : ($student?->student_userName ?? 'N/A'),
-                        "country_code" => $student?->student_countryCode ?? '',
-                        "contact_number" => $student?->student_contactNo ?? '',
-                        "student_id" => $student->id ?? 'No student ID return',
-                        "created_date" => $applicant->created_at->format("d/M/y"),
-                        "data_status" => match ((int)$applicant->data_status) {
-                            0 => "Disable",
-                            1 => "Active",
-                            default => null,
-                        },
-                    ];
+            // Base query with eager loads and filters
+            $query = stp_submited_form::with(['student.detail', 'course.school'])
+                ->when($request->filled('data_status'), function ($q) use ($request) {
+                    $q->where('data_status', $request->data_status);
+                })
+                ->when($request->filled('form_status'), function ($q) use ($request) {
+                    $q->where('form_status', $request->form_status);
+                })
+                ->when($request->filled('school_id'), function ($q) use ($request) {
+                    $q->whereHas('course.school', function ($sq) use ($request) {
+                        $sq->where('id', $request->school_id);
+                    });
+                })
+                ->when($request->filled('qualification_id'), function ($q) use ($request) {
+                    $q->where('qualification_id', $request->qualification_id);
+                })
+                ->when($request->filled('search'), function ($q) use ($request) {
+                    $searchTerm = $request->search;
+                    $q->whereHas('student', function ($studentQuery) use ($searchTerm) {
+                        $studentQuery->where('student_email', 'like', "%$searchTerm%")
+                            ->orWhereHas('detail', function ($detailQuery) use ($searchTerm) {
+                                $detailQuery->where('student_detailFirstName', 'like', "%$searchTerm%")
+                                    ->orWhere('student_detailLastName', 'like', "%$searchTerm%");
+                            });
+                    });
                 });
 
-            // Return the paginated response with success flag
+            // DB-level sorting when possible
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'created_date') {
+                    $query->orderBy('created_at', $sortDirection);
+                } elseif ($sortColumn === 'form_status') {
+                    $query->orderBy('form_status', $sortDirection);
+                } else {
+                    // For student_name, course_name, institution, contact_number: keep default order, sort within page
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Total count for pagination
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch only current page
+            $pageApplicants = $query->skip($offset)->take($limit)->get();
+
+            // Map rows
+            $processedData = $pageApplicants->map(function ($applicant) {
+                $student = $applicant->student;
+                $studentDetail = $student?->detail;
+
+                return [
+                    "id" => $applicant->id ?? 'N/A',
+                    "student_name" => $studentDetail
+                        ? "{$studentDetail->student_detailFirstName} {$studentDetail->student_detailLastName}"
+                        : ($student?->student_userName ?? 'N/A'),
+                    "course_name" => $applicant->course->course_name ?? 'N/A',
+                    "institution" => $applicant->course->school->school_name ?? 'N/A',
+                    "contact_number" => $student?->student_contactNo ?? '',
+                    "country_code" => $student?->student_countryCode ?? '',
+                    "created_date" => $applicant->created_at->format("d/M/y"),
+                    "form_status" => match ((int)$applicant->form_status) {
+                        0 => "Disable",
+                        1 => "Active",
+                        2 => "Pending",
+                        3 => "Rejected",
+                        4 => "Accepted",
+                        5 => "In Progress",
+                        6 => "Waiting Approval",
+                        7 => "Withdrawn",
+                        default => null,
+                    },
+                    "data_status" => match ((int)$applicant->data_status) {
+                        0 => "Disable",
+                        1 => "Active",
+                        default => null,
+                    },
+                ];
+            });
+
+            // Sort inside current page for related text fields
+            if ($sortColumn && in_array($sortColumn, ['student_name', 'course_name', 'institution', 'contact_number'], true) && $sortDirection) {
+                $processedData = $processedData->sort(function ($a, $b) use ($sortColumn, $sortDirection) {
+                    $aValue = $a[$sortColumn] ?? '';
+                    $bValue = $b[$sortColumn] ?? '';
+
+                    // Convert to lowercase for case-insensitive comparison
+                    $aValue = strtolower($aValue);
+                    $bValue = strtolower($bValue);
+
+                    // String comparison for other fields
+                    $result = strcmp($aValue, $bValue);
+                    return $sortDirection === 'asc' ? $result : -$result;
+                })->values();
+            }
+
+            // Return the response with success flag
             return response()->json([
                 'success' => true,
-                'data' => $applicantInfo,
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => ($offset + $limit) < $totalCount,
                 'message' => 'Applicant details retrieved successfully'
             ]);
         } catch (\Exception $e) {
@@ -3382,61 +3669,76 @@ class AdminController extends Controller
     public function packageList(Request $request)
     {
         try {
-            // Get the per_page value from the request, default to 10 if not provided or empty
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_package::count() : (int)$request->per_page)
-                : 10;
+            $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,type,price,package_status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
 
-            // Check if the 'id' parameter is provided to get a specific package
-            if ($request->filled('id')) {
-                $package = stp_package::find($request->id);
-                if ($request->filled('stat')) {
-                    $package->where('package_status', $request->stat);
-                }
-                if (!$package) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Package not found'
-                    ], 404);
-                }
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
 
-                $status = ($package->package_status == 1) ? "Active" : "Disable";
-
-                return response()->json([
-                    "id" => $package->id,
-                    "package_name" => $package->package_name,
-                    "package_detail" => $package->package_detail,
-                    "package_type" => $package->package_type,
-                    "package_price" => $package->package_price,
-                    "package_status" => $status
-                ]);
-            }
-
-            // If 'id' is not provided, return the paginated package list
-            $packageList = stp_package::query()
+            // Base query with filters
+            $query = stp_package::query()
                 ->when($request->filled('package_type'), function ($query) use ($request) {
                     $query->where('package_type', $request->package_type);
                 })
                 ->when($request->filled('search'), function ($query) use ($request) {
                     $query->where('package_name', 'like', '%' . $request->search . '%');
                 })
-                ->when($request->filled('stat'), function ($query) use ($request) {  // Add status filter
+                ->when($request->filled('stat'), function ($query) use ($request) {
                     $query->where('package_status', $request->stat);
-                })
-                ->paginate($perPage)
-                ->through(function ($package) {
-                    $status = ($package->package_status == 1) ? "Active" : "Disable";
-                    return [
-                        "id" => $package->id,
-                        "package_name" => $package->package_name,
-                        "package_detail" => $package->package_detail,
-                        "package_type" => $package->package_type,
-                        "package_price" => $package->package_price,
-                        "package_status" => $status
-                    ];
                 });
 
-            return response()->json($packageList);
+            // DB-level sorting
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('package_name', $sortDirection);
+                } elseif ($sortColumn === 'type') {
+                    $query->orderBy('package_type', $sortDirection);
+                } elseif ($sortColumn === 'price') {
+                    $query->orderBy('package_price', $sortDirection);
+                } elseif ($sortColumn === 'package_status') {
+                    $query->orderBy('package_status', $sortDirection);
+                } else {
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch only current page
+            $pagePackages = $query->skip($offset)->take($limit)->get();
+
+            // Map current page rows
+            $processedData = $pagePackages->map(function ($package) {
+                $status = ($package->package_status == 1) ? "Active" : "Disable";
+                return [
+                    "id" => $package->id,
+                    "name" => $package->package_name,
+                    "package_name" => $package->package_name,
+                    "package_detail" => $package->package_detail,
+                    "type" => $package->package_type,
+                    "package_type" => $package->package_type,
+                    "price" => $package->package_price,
+                    "package_price" => $package->package_price,
+                    "package_status" => $status
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => ($offset + $limit) < $totalCount
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -3500,20 +3802,65 @@ class AdminController extends Controller
     {
         try {
             $request->validate([
-                'core_meta_type' => 'required|string'
+                'core_meta_type' => 'nullable|string',
+                'search' => 'nullable|string',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,email,status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
             ]);
-            $dataList = stp_core_meta::where('core_metaType', $request->core_meta_type)->get()
-                ->map(function ($list) {
-                    return [
-                        'id' => $list->id,
-                        'core_metaType' => $list->core_metaType,
-                        'core_metaName' => $list->core_metaName,
-                        'status' => $list->core_metaStatus
-                    ];
+
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
+
+            // Build the query with filters
+            $query = stp_core_meta::query()
+                ->when($request->filled('core_meta_type'), function ($q) use ($request) {
+                    $q->where('core_metaType', $request->core_meta_type);
+                })
+                ->when($request->filled('search'), function ($q) use ($request) {
+                    $q->where('core_metaName', 'like', '%' . $request->search . '%');
                 });
+
+            // DB-level sorting
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('core_metaType', $sortDirection);
+                } elseif ($sortColumn === 'email') {
+                    $query->orderBy('core_metaName', $sortDirection);
+                } elseif ($sortColumn === 'status') {
+                    $query->orderBy('core_metaStatus', $sortDirection);
+                } else {
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch page
+            $rows = $query->skip($offset)->take($limit)->get();
+
+            // Map to response shape
+            $processedData = $rows->map(function ($list) {
+                return [
+                    'id' => $list->id,
+                    'name' => $list->core_metaType,
+                    'core_metaType' => $list->core_metaType,
+                    'email' => $list->core_metaName,
+                    'core_metaName' => $list->core_metaName,
+                    'status' => $list->core_metaStatus
+                ];
+            })->values();
+
             return response()->json([
                 'success' => true,
-                'data' => $dataList
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => ($offset + $limit) < $totalCount
             ]);
         } catch (ValidationException $e) {
             return response()->json([
@@ -3965,52 +4312,95 @@ class AdminController extends Controller
     }
 
     public function adminListAdmin(Request $request)
-
     {
         try {
-            // Get the per_page value from the request, default to 10 if not provided or empty
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? User::count() : (int)$request->per_page)
-                : 10;
+            $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,email,contact,status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
 
-            $adminList = User::when($request->filled('search'), function ($query) use ($request) {
-                $query->where('name', 'like', '%' . $request->search . '%');
-            })->when($request->filled('stat'), function ($query) use ($request) {
-                $query->where('status', $request->stat);
-            })
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
 
-                ->paginate($perPage)
-                ->through(function ($admin) {
-                    switch ($admin->status) {
-                        case 0:
-                            $status = "Disable";
-                            break;
-                        case 1:
-                            $status = "Active";
-                            break;
-                        case 2:
-                            $status = "Pending";
-                            break;
-                        case 3:
-                            $status = "Temporary";
-                            break;
-                        case 4:
-                            $status = "Temporary-Disable";
-                            break;
-                        default:
-                            $status = null;
-                    }
-
-                    return [
-                        'id' => $admin->id,
-                        "name" => $admin->name,
-                        "email" => $admin->email,
-                        "ic_number" => $admin->ic_Number,
-                        "contact_no" => $admin->contact_no,
-                        'status' => $status
-                    ];
+            // Build base query with DB-level filters
+            $query = User::query()
+                ->when($request->filled('search'), function ($query) use ($request) {
+                    $query->where(function ($q) use ($request) {
+                        $q->where('name', 'like', '%' . $request->search . '%')
+                          ->orWhere('email', 'like', '%' . $request->search . '%');
+                    });
+                })
+                ->when($request->filled('stat'), function ($query) use ($request) {
+                    $query->where('status', $request->stat);
                 });
-            return response()->json($adminList);
+
+            // DB-level sorting
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('name', $sortDirection);
+                } elseif ($sortColumn === 'email') {
+                    $query->orderBy('email', $sortDirection);
+                } elseif ($sortColumn === 'contact') {
+                    $query->orderBy('contact_no', $sortDirection);
+                } elseif ($sortColumn === 'status') {
+                    $query->orderBy('status', $sortDirection);
+                } else {
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch current page
+            $admins = $query->skip($offset)->take($limit)->get();
+
+            // Map to response shape
+            $processedData = $admins->map(function ($admin) {
+                switch ($admin->status) {
+                    case 0:
+                        $status = "Disable";
+                        break;
+                    case 1:
+                        $status = "Active";
+                        break;
+                    case 2:
+                        $status = "Pending";
+                        break;
+                    case 3:
+                        $status = "Temporary";
+                        break;
+                    case 4:
+                        $status = "Temporary-Disable";
+                        break;
+                    default:
+                        $status = null;
+                }
+
+                return [
+                    'id' => $admin->id,
+                    'name' => $admin->name,
+                    'email' => $admin->email,
+                    'contact' => $admin->contact_no,
+                    'status' => $status
+                ];
+            })->values();
+
+            $hasMore = ($offset + $limit) < $totalCount;
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -4024,66 +4414,109 @@ class AdminController extends Controller
     public function bannerListAdmin(Request $request)
     {
         try {
-            // Get the per_page value from the request, default to 10 if not provided or empty
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_advertisement_banner::count() : (int)$request->per_page)
-                : 10;
+            $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,file,featured,banner_duration,status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
 
-            // Build the query
-            $query = stp_advertisement_banner::query();
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
+
+            // Base query with relation for featured meta
+            $query = stp_advertisement_banner::with(['banner']);
 
             // Filter by search term if provided
             if ($request->filled('search')) {
                 $query->where('banner_name', 'like', '%' . $request->search . '%');
-            }
-            // Filter by ID if provided
-            if ($request->filled('id')) {
-                $query->where('id', $request->id);
             }
             // Filter by status if provided
             if ($request->filled('stat')) {
                 $query->where('banner_status', $request->stat);
             }
 
-            // Paginate the results
-            $bannerList = $query->paginate($perPage)
-                ->through(function ($banner) {
-                    // Map banner_status to status label
-                    switch ($banner->banner_status) {
-                        case 0:
-                            $status = "Disable";
-                            break;
-                        case 1:
-                            $status = "Active";
-                            break;
-                        default:
-                            $status = null;
-                    }
+            // Sorting at DB level where possible
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('banner_name', $sortDirection);
+                } elseif ($sortColumn === 'file') {
+                    $query->orderBy('banner_file', $sortDirection);
+                } elseif ($sortColumn === 'status') {
+                    $query->orderBy('banner_status', $sortDirection);
+                } elseif ($sortColumn === 'banner_duration') {
+                    // Sort by start then end
+                    $query->orderBy('banner_start', $sortDirection)
+                          ->orderBy('banner_end', $sortDirection);
+                } else {
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
 
-                    // Convert banner_start and banner_end to datetime-local format
-                    $bannerStart = Carbon::parse($banner->banner_start)->format('Y-m-d\TH:i');
-                    $bannerEnd = Carbon::parse($banner->banner_end)->format('Y-m-d\TH:i');
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
 
-                    // Get the featured metadata
-                    $featured = $banner->banner ? [
-                        'featured_id' => $banner->banner->id ?? '',
-                        'core_metaName' => $banner->banner->core_metaName ?? ''
-                    ] : null;
+            // Fetch only current page
+            $pageBanners = $query->skip($offset)->take($limit)->get();
 
-                    return [
-                        'id' => $banner->id,
-                        'name' => $banner->banner_name ?? '',
-                        'url' => $banner->banner_url ?? '',
-                        'file' => $banner->banner_file ?? '',
-                        'banner_duration' => $banner->banner_start . ' - ' . $banner->banner_end,
-                        'banner_start' => $bannerStart ?? '', // Formatted start date
-                        'banner_end' => $bannerEnd ?? '',     // Formatted end date
-                        'featured' => $featured ?? '', // Single featured_id and core_metaName
-                        'status' => $status
-                    ];
-                });
+            // Map page rows
+            $processedData = $pageBanners->map(function ($banner) {
+                // Map banner_status to status label
+                switch ($banner->banner_status) {
+                    case 0:
+                        $status = "Disable";
+                        break;
+                    case 1:
+                        $status = "Active";
+                        break;
+                    default:
+                        $status = null;
+                }
 
-            return response()->json($bannerList);
+                // Convert banner_start and banner_end to datetime-local format
+                $bannerStart = Carbon::parse($banner->banner_start)->format('Y-m-d\TH:i');
+                $bannerEnd = Carbon::parse($banner->banner_end)->format('Y-m-d\TH:i');
+
+                // Get the featured metadata
+                $featured = $banner->banner ? [
+                    'featured_id' => $banner->banner->id ?? '',
+                    'core_metaName' => $banner->banner->core_metaName ?? ''
+                ] : null;
+
+                return [
+                    'id' => $banner->id,
+                    'name' => $banner->banner_name ?? '',
+                    'url' => $banner->banner_url ?? '',
+                    'file' => $banner->banner_file ?? '',
+                    'banner_duration' => $banner->banner_start . ' - ' . $banner->banner_end,
+                    'banner_start' => $bannerStart ?? '', // Formatted start date
+                    'banner_end' => $bannerEnd ?? '',     // Formatted end date
+                    'featured' => $featured ?? '', // Single featured_id and core_metaName
+                    'status' => $status
+                ];
+            });
+
+            // If requested, sort by featured name within the page
+            if ($sortColumn === 'featured' && $sortDirection) {
+                $processedData = $processedData->sort(function ($a, $b) use ($sortDirection) {
+                    $aValue = is_array($a['featured']) ? strtolower($a['featured']['core_metaName'] ?? '') : '';
+                    $bValue = is_array($b['featured']) ? strtolower($b['featured']['core_metaName'] ?? '') : '';
+                    $cmp = strcmp($aValue, $bValue);
+                    return $sortDirection === 'asc' ? $cmp : -$cmp;
+                })->values();
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => ($offset + $limit) < $totalCount
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -5199,21 +5632,25 @@ class AdminController extends Controller
                 'featured_type' => "nullable|integer",
                 "status" => "nullable|integer",
                 "request_type" => "nullable|integer",
-                "per_page" => "nullable|string"
+                "offset" => "nullable|integer|min:0",
+                'sort_column' => 'nullable|string|in:request_name,school_name,featured_type,total_quantity,duration,request_status,request_date',
+                'sort_direction' => 'nullable|string|in:asc,desc'
             ]);
 
-            // Determine pagination
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? null : (int) $request->per_page)
-                : 10;
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
 
-            // Query with filters and ordering
+            // Build base query with filters
             $query = stp_featured_request::with(['school', 'featured'])
                 ->when($request->filled('search'), function ($query) use ($request) {
-                    $query->where('request_name', 'like', '%' . $request->search . '%')
-                        ->orWhereHas('school', function ($q) use ($request) {
-                            $q->where('school_name', 'like', '%' . $request->search . '%');
-                        });
+                    $query->where(function ($sq) use ($request) {
+                        $sq->where('request_name', 'like', '%' . $request->search . '%')
+                           ->orWhereHas('school', function ($q) use ($request) {
+                               $q->where('school_name', 'like', '%' . $request->search . '%');
+                           });
+                    });
                 })
                 ->when($request->filled('featured_type'), function ($query) use ($request) {
                     $query->where('featured_type', $request->featured_type);
@@ -5223,14 +5660,35 @@ class AdminController extends Controller
                 })
                 ->when($request->filled('request_type'), function ($query) use ($request) {
                     $query->where('request_type', $request->request_type);
-                })
-                ->latest(); // Order by created_at in descending order
+                });
 
-            // Fetch results
-            $featuredList = $perPage ? $query->paginate($perPage) : $query->get();
+            // DB-level sorting for simple columns
+            if ($sortColumn && $sortDirection) {
+                if (in_array($sortColumn, ['request_name', 'total_quantity', 'duration', 'request_status'], true)) {
+                    $columnMap = [
+                        'total_quantity' => 'request_quantity',
+                        'duration' => 'request_featured_duration',
+                    ];
+                    $dbCol = $columnMap[$sortColumn] ?? $sortColumn;
+                    $query->orderBy($dbCol, $sortDirection);
+                } elseif ($sortColumn === 'request_date') {
+                    $query->orderBy('created_at', $sortDirection);
+                } else {
+                    // For school_name and featured_type, sort later within page
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
 
-            // Transform data
-            $formattedData = $featuredList->map(function ($item) {
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch only current page
+            $pageItems = $query->skip($offset)->take($limit)->get();
+
+            // Transform current page
+            $formattedData = $pageItems->map(function ($item) {
                 return [
                     'id' => $item->id,
                     'school' => [
@@ -5250,16 +5708,50 @@ class AdminController extends Controller
                 ];
             });
 
+            // If sorting by related names, sort within current page
+            if ($sortColumn && in_array($sortColumn, ['school_name', 'featured_type'], true) && $sortDirection) {
+                $formattedData = $formattedData->sort(function ($a, $b) use ($sortColumn, $sortDirection) {
+                    $aValue = '';
+                    $bValue = '';
+
+                    // Handle different column types
+                    switch ($sortColumn) {
+                        case 'school_name':
+                            $aValue = $a['school']['school_name'] ?? '';
+                            $bValue = $b['school']['school_name'] ?? '';
+                            break;
+                        case 'featured_type':
+                            $aValue = $a['featured_type']['featured_type'] ?? '';
+                            $bValue = $b['featured_type']['featured_type'] ?? '';
+                            break;
+                        default:
+                            $aValue = $a[$sortColumn] ?? '';
+                            $bValue = $b[$sortColumn] ?? '';
+                    }
+
+                    // Handle parentheses for text columns
+                    if (in_array($sortColumn, ['request_name', 'school_name', 'featured_type'])) {
+                        $aValue = preg_replace('/[()]/', '', $aValue);
+                        $bValue = preg_replace('/[()]/', '', $bValue);
+                    }
+
+                    // Convert to lowercase for case-insensitive comparison
+                    $aValue = strtolower($aValue);
+                    $bValue = strtolower($bValue);
+
+                    // Compare values
+                    $comparison = strcmp($aValue, $bValue);
+
+                    return $sortDirection === 'asc' ? $comparison : -$comparison;
+                });
+            }
+
             // Return response
             return response()->json([
                 'success' => true,
-                'data' => $formattedData,
-                'pagination' => $perPage ? [
-                    'current_page' => $featuredList->currentPage(),
-                    'last_page' => $featuredList->lastPage(),
-                    'per_page' => $featuredList->perPage(),
-                    'total' => $featuredList->total(),
-                ] : null
+                'data' => $formattedData->values(),
+                'total' => $totalCount,
+                'has_more' => ($offset + $limit) < $totalCount
             ]);
         } catch (\Exception $e) {
             Log::error('Error in featuredRequestList: ' . $e->getMessage(), [
@@ -5629,21 +6121,49 @@ class AdminController extends Controller
     public function riasecTypesList(Request $request)
     {
         try {
-            // Get the per_page value from the request, default to 10 if not provided or empty
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_RIASECType::count() : (int)$request->per_page)
-                : 10;
+            // Validate request input
+            $validatedData = $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:type_name,status,created_at',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
 
-            $query = stp_RIASECType::query();
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
 
-            // Add status filter if provided in request
-            if ($request->has('stat')) {
-                $query->where('status', (int)$request->stat);
+            $query = stp_RIASECType::query()
+                ->when($request->filled('search'), function ($query) use ($request) {
+                    $query->where('type_name', 'like', '%' . $request->search . '%')
+                        ->orWhere('unique_description', 'like', '%' . $request->search . '%');
+                })
+                ->when($request->has('stat'), function ($query) use ($request) {
+                    $query->where('status', (int)$request->stat);
+                });
+
+            // Apply DB-level sorting
+            if ($sortColumn && $sortDirection) {
+                if (in_array($sortColumn, ['type_name', 'status'], true)) {
+                    $query->orderBy($sortColumn, $sortDirection);
+                } elseif ($sortColumn === 'created_at') {
+                    $query->orderBy('created_at', $sortDirection);
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
             }
 
+            // Get total count for has_more calculation
+            $totalCount = $query->toBase()->count();
+
+            // Get riasec types with offset and limit
             $typeList = $query
-                ->paginate($perPage)
-                ->through(function ($type) {
+                ->offset($offset)
+                ->limit($limit)
+                ->get()
+                ->map(function ($type) {
                     return [
                         'id' => $type->id,
                         'type_name' => $type->type_name,
@@ -5653,7 +6173,12 @@ class AdminController extends Controller
                     ];
                 });
 
-            return response()->json($typeList);
+            return response()->json([
+                'success' => true,
+                'data' => $typeList,
+                'total' => $totalCount,
+                'has_more' => ($offset + $limit) < $totalCount
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -5875,39 +6400,81 @@ class AdminController extends Controller
     public function personalityQuestionList(Request $request)
     {
         try {
-            $request->validate([
+            // Validate request input
+            $validatedData = $request->validate([
                 'search' => 'nullable|string',
-                'type' => 'integer',
-                'status' => 'integer'
+                'category_id' => 'nullable|integer',
+                'status' => 'nullable|integer',
+                'month_year' => 'nullable|string',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:question,riasec_type,status,created_at',
+                'sort_direction' => 'nullable|string|in:asc,desc'
             ]);
 
-            // Get the per_page value from the request, default to 10 if not provided or empty
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_personalityQuestions::count() : (int)$request->per_page)
-                : 10;
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
 
-            $questionList = stp_personalityQuestions::query()
-                ->when($request->has('search') && !empty($request->search), function ($query) use ($request) {
-                    return $query->where('question', 'like', '%' . $request->search . '%');
+            // Build base query
+            $query = stp_personalityQuestions::with(['question_type'])
+                ->when($request->filled('search'), function ($q) use ($request) {
+                    $q->where('question', 'like', '%' . $request->search . '%');
                 })
-                ->when($request->has('type') && !empty($request->type), function ($query) use ($request) {
-                    return $query->where('riasec_type', $request->type);
+                ->when($request->filled('category_id'), function ($q) use ($request) {
+                    $q->where('riasec_type', $request->category_id);
                 })
-                ->when($request->has('status'), function ($query) use ($request) {
-                    return $query->where('status', $request->status);
-                })
-                ->paginate($perPage)
-                ->through(function ($question) {
-                    return [
-                        'id' => $question->id,
-                        'question' => $question->question,
-                        'riasec_type' => $question->question_type->type_name,
-                        'status' => $question->status,
-                        // Add any other fields you want to include in the response
-                    ];
+                ->when($request->filled('status'), function ($q) use ($request) {
+                    $q->where('status', $request->status);
                 });
 
-            return response()->json($questionList);
+            // DB-level sorting
+            if ($sortColumn && $sortDirection) {
+                if (in_array($sortColumn, ['question', 'status'], true)) {
+                    $query->orderBy($sortColumn, $sortDirection);
+                } elseif ($sortColumn === 'created_at') {
+                    $query->orderBy('created_at', $sortDirection);
+                } else {
+                    // riasec_type: sort within page by related type name
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch current page
+            $pageRows = $query->skip($offset)->take($limit)->get();
+
+            // Map to response
+            $formattedData = $pageRows->map(function ($question) {
+                return [
+                    'id' => $question->id,
+                    'question' => $question->question,
+                    'riasec_type' => $question->question_type->type_name,
+                    'status' => $question->status,
+                    'created_at' => $question->created_at->format('d/M/y'),
+                ];
+            })->values();
+
+            // If requested, sort by riasec_type within current page
+            if ($sortColumn === 'riasec_type' && $sortDirection) {
+                $formattedData = $formattedData->sort(function ($a, $b) use ($sortDirection) {
+                    $aValue = strtolower($a['riasec_type'] ?? '');
+                    $bValue = strtolower($b['riasec_type'] ?? '');
+                    $cmp = strcmp($aValue, $bValue);
+                    return $sortDirection === 'asc' ? $cmp : -$cmp;
+                })->values();
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $formattedData,
+                'total' => $totalCount,
+                'has_more' => ($offset + $limit) < $totalCount
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -6147,9 +6714,20 @@ class AdminController extends Controller
     public function interestedCourseListAdmin(Request $request)
     {
         try {
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_courseInterest::count() : (int)$request->per_page)
-                : 10;
+            // Validate request input
+            $validatedData = $request->validate([
+                'search' => "nullable|string",
+                'category_id' => "nullable|integer",
+                'month_year' => "nullable|string",
+                'offset' => "nullable|integer|min:0",
+                'sort_column' => 'nullable|string|in:category_type,category_total,schoolName,courseName,schoolEmail,latestDate',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
+
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
 
             $query = stp_courseInterest::where('status', 1);
 
@@ -6157,15 +6735,11 @@ class AdminController extends Controller
                 $query->where('student_id', $request->student_id);
             }
 
-            if ($request->filled('school_name')) {
+            if ($request->filled('search')) {
                 $query->whereHas('course.school', function ($q) use ($request) {
-                    $q->where('school_name', 'like', '%' . $request->school_name . '%');
-                });
-            }
-
-            if ($request->filled('course_name')) {
-                $query->whereHas('course', function ($q) use ($request) {
-                    $q->where('course_name', 'like', '%' . $request->course_name . '%');
+                    $q->where('school_name', 'like', '%' . $request->search . '%');
+                })->orWhereHas('course', function ($q) use ($request) {
+                    $q->where('course_name', 'like', '%' . $request->search . '%');
                 });
             }
 
@@ -6203,56 +6777,132 @@ class AdminController extends Controller
                 }
             }
 
-            // Get paginated results
-            $interestedCourses = $query
-                ->with([
-                    'course.school:id,school_name,school_email',
-                    'course.category:id,category_name'
+            // Build category counts via SQL (respecting filters)
+            $countsQuery = DB::table('stp_course_interests as i')
+                ->join('stp_courses as c', 'c.id', '=', 'i.course_id')
+                ->leftJoin('stp_courses_categories as cat', 'cat.id', '=', 'c.category_id')
+                ->where('i.status', 1);
+
+            if ($request->filled('student_id')) {
+                $countsQuery->where('i.student_id', $request->student_id);
+            }
+            if ($request->filled('search')) {
+                $countsQuery->where(function ($q) use ($request) {
+                    $q->where('c.course_name', 'like', '%' . $request->search . '%')
+                      ->orWhereExists(function ($sq) use ($request) {
+                          $sq->select(DB::raw(1))
+                             ->from('stp_schools as s')
+                             ->whereColumn('s.id', 'c.school_id')
+                             ->where('s.school_name', 'like', '%' . $request->search . '%');
+                      });
+                });
+            }
+            if ($request->filled('category_id')) {
+                $countsQuery->where('c.category_id', $request->category_id);
+            }
+            if ($request->filled('month_year')) {
+                if (strpos($request->month_year, ' - ') !== false) {
+                    [$startDate, $endDate] = explode(' - ', $request->month_year);
+                    [$startMonth, $startYear] = explode('/', $startDate);
+                    [$endMonth, $endYear] = explode('/', $endDate);
+                    $countsQuery->where(function ($q) use ($startMonth, $startYear, $endMonth, $endYear) {
+                        $q->whereBetween('i.created_at', ["$startYear-$startMonth-01", date('Y-m-t', strtotime("$endYear-$endMonth-01"))])
+                          ->orWhereBetween('i.updated_at', ["$startYear-$startMonth-01", date('Y-m-t', strtotime("$endYear-$endMonth-01"))]);
+                    });
+                } elseif (preg_match('/^\d{1,2}\/\d{4}$/', $request->month_year)) {
+                    [$month, $year] = explode('/', $request->month_year);
+                    $countsQuery->where(function ($q) use ($month, $year) {
+                        $q->whereYear('i.created_at', $year)->whereMonth('i.created_at', $month)
+                          ->orWhereYear('i.updated_at', $year)->whereMonth('i.updated_at', $month);
+                    });
+                }
+            }
+            $categoryTotals = $countsQuery->groupBy('c.category_id')
+                ->select('c.category_id', DB::raw('COUNT(*) as category_total'))
+                ->pluck('category_total', 'c.category_id');
+
+            // Build rows query with joins (no subquery join)
+            $rows = DB::table('stp_course_interests as i')
+                ->join('stp_courses as c', 'c.id', '=', 'i.course_id')
+                ->leftJoin('stp_schools as s', 's.id', '=', 'c.school_id')
+                ->leftJoin('stp_courses_categories as cat', 'cat.id', '=', 'c.category_id')
+                ->addSelect([
+                    'cat.id as categoryId',
+                    'cat.category_name as category_type',
+                    's.school_name as schoolName',
+                    'c.course_name as courseName',
+                    's.school_email as schoolEmail',
+                    DB::raw('GREATEST(i.updated_at, i.created_at) as latestDate'),
                 ])
-                ->get();
+                ->where('i.status', 1);
 
-            // Group results by category type
-            $groupedByCategories = collect($interestedCourses)
-                ->groupBy(function ($item) {
-                    return $item->course->category->category_name ?? 'Uncategorized';
-                })
-                ->map(function ($group, $category) {
-                    return [
-                        'categoryId' => $group->first()->course->category->id ?? null,
-                        'category_type' => $category,
-                        'category_total' => $group->count(),
-                        'schoolList' => $group->map(function ($item) {
-                            $latestDate = $item->updated_at > $item->created_at ? $item->updated_at : $item->created_at;
-                            return [
-                                'schoolName' => $item->course->school->school_name,
-                                'courseName' => $item->course->course_name,
-                                'schoolEmail' => $item->course->school->school_email,
-                                'latestDate' => $latestDate,
-                            ];
-                        })->values()->toArray(),
-                    ];
-                })
-                ->values();
+            // Apply same filters to rows query
+            if ($request->filled('student_id')) {
+                $rows->where('i.student_id', $request->student_id);
+            }
+            if ($request->filled('search')) {
+                $rows->where(function ($q) use ($request) {
+                    $q->where('s.school_name', 'like', '%' . $request->search . '%')
+                      ->orWhere('c.course_name', 'like', '%' . $request->search . '%');
+                });
+            }
+            if ($request->filled('category_id')) {
+                $rows->where('c.category_id', $request->category_id);
+            }
+            if ($request->filled('month_year')) {
+                if (strpos($request->month_year, ' - ') !== false) {
+                    [$startDate, $endDate] = explode(' - ', $request->month_year);
+                    [$startMonth, $startYear] = explode('/', $startDate);
+                    [$endMonth, $endYear] = explode('/', $endDate);
+                    $rows->where(function ($q) use ($startMonth, $startYear, $endMonth, $endYear) {
+                        $q->whereBetween('i.created_at', ["$startYear-$startMonth-01", date('Y-m-t', strtotime("$endYear-$endMonth-01"))])
+                          ->orWhereBetween('i.updated_at', ["$startYear-$startMonth-01", date('Y-m-t', strtotime("$endYear-$endMonth-01"))]);
+                    });
+                } elseif (preg_match('/^\d{1,2}\/\d{4}$/', $request->month_year)) {
+                    [$month, $year] = explode('/', $request->month_year);
+                    $rows->where(function ($q) use ($month, $year) {
+                        $q->whereYear('i.created_at', $year)->whereMonth('i.created_at', $month)
+                          ->orWhereYear('i.updated_at', $year)->whereMonth('i.updated_at', $month);
+                    });
+                }
+            }
 
-            // Paginate the grouped data
-            $page = $request->input('page', 1);
-            $paginated = new LengthAwarePaginator(
-                $groupedByCategories->forPage($page, $perPage)->values(),
-                $groupedByCategories->count(),
-                $perPage,
-                $page,
-                ['path' => $request->url(), 'query' => $request->query()]
-            );
+            // Sorting
+            if ($sortColumn && $sortDirection) {
+                $columnMap = [
+                    'category_type' => 'cat.category_name',
+                    'schoolName' => 's.school_name',
+                    'courseName' => 'c.course_name',
+                    'schoolEmail' => 's.school_email',
+                    'latestDate' => DB::raw('GREATEST(i.updated_at, i.created_at)'),
+                    'category_total' => DB::raw('COALESCE(ct.cnt, 0)'),
+                ];
+                $col = $columnMap[$sortColumn] ?? DB::raw('GREATEST(i.updated_at, i.created_at)');
+                $rows->orderBy($col, $sortDirection);
+            } else {
+                $rows->orderBy(DB::raw('GREATEST(i.updated_at, i.created_at)'), 'desc');
+            }
+
+            // Total and page
+            $totalFlatCount = (clone $rows)->count();
+            $flatPage = $rows->skip($offset)->take($limit)->get()->map(function ($r) use ($categoryTotals) {
+                $catId = $r->categoryId;
+                return [
+                    'categoryId' => $r->categoryId,
+                    'category_type' => $r->category_type ?? 'Uncategorized',
+                    'category_total' => (int) ($categoryTotals[$catId] ?? 0),
+                    'schoolName' => $r->schoolName,
+                    'courseName' => $r->courseName,
+                    'schoolEmail' => $r->schoolEmail,
+                    'latestDate' => $r->latestDate ? Carbon::parse($r->latestDate)->format('Y-m-d H:i:s') : null,
+                ];
+            });
 
             return response()->json([
                 'success' => true,
-                'categories' => $paginated->items(),
-                'pagination' => [
-                    'current_page' => $paginated->currentPage(),
-                    'last_page' => $paginated->lastPage(),
-                    'per_page' => $paginated->perPage(),
-                    'total' => $paginated->total(),
-                ],
+                'data' => $flatPage->toArray(),
+                'total' => $totalFlatCount,
+                'has_more' => ($offset + $limit) < $totalFlatCount
             ]);
         } catch (\Exception $e) {
             \Log::error('Error in interestedCourseListAdmin: ' . $e->getMessage());
@@ -6271,94 +6921,89 @@ class AdminController extends Controller
                 'school_name' => 'nullable|string',
                 'start_date' => 'nullable|date|required_with:end_date',
                 'end_date' => 'nullable|date|required_with:start_date',
-                'per_page' => 'nullable|string'
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:school_name,today_visit,month_visit,total_visit,year_visit,FilteredVisit',
+                'sort_direction' => 'nullable|string|in:asc,desc'
             ]);
 
-            $perPage = $request->filled('per_page') && $request->per_page !== ""
-                ? ($request->per_page === 'All' ? stp_school::count() : (int)$request->per_page)
-                : 10;
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column ?? null;
+            $sortDirection = $request->sort_direction ?? null;
 
-            $query = stp_school::where('school_status', '!=', 0)
+            $startDate = $request->start_date ? Carbon::parse($request->start_date)->startOfDay() : null;
+            $endDate = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : null;
+
+            // Build base query with SQL aggregations for performance
+            $baseQuery = stp_school::query()
+                ->from('stp_schools as s')
+                ->leftJoin('stp_total_number_visits as v', 'v.school_id', '=', 's.id')
+                ->where('s.school_status', '!=', 0)
                 ->when($request->school_name, function ($query, $schoolName) {
-                    $query->where('school_name', 'like', '%' . $schoolName . '%');
-                });
+                    $query->where('s.school_name', 'like', '%' . $schoolName . '%');
+                })
+                ->select([
+                    's.id as school_id',
+                    's.school_name',
+                    DB::raw("COALESCE(SUM(v.totalNumberVisit), 0) as total_visit"),
+                    DB::raw("COALESCE(SUM(CASE WHEN DATE(v.created_at) = CURDATE() THEN v.totalNumberVisit ELSE 0 END), 0) as today_visit"),
+                    DB::raw("COALESCE(SUM(CASE WHEN YEAR(v.created_at) = YEAR(CURDATE()) AND MONTH(v.created_at) = MONTH(CURDATE()) THEN v.totalNumberVisit ELSE 0 END), 0) as month_visit"),
+                    DB::raw("COALESCE(SUM(CASE WHEN YEAR(v.created_at) = YEAR(CURDATE()) THEN v.totalNumberVisit ELSE 0 END), 0) as year_visit"),
+                ])
+                ->groupBy('s.id', 's.school_name');
 
-            $getNumberOfVisit = $query->paginate($perPage)
-                ->through(function ($school) use ($request) {
-                    $startDate = $request->start_date ? Carbon::parse($request->start_date)->startOfDay() : null;
-                    $endDate = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : null;
+            // Apply filtered visit only when date range is provided
+            if ($startDate && $endDate) {
+                $filteredSub = stp_totalNumberVisit::query()
+                    ->select('school_id', DB::raw('SUM(totalNumberVisit) as FilteredVisit'))
+                    ->whereBetween('created_at', [$startDate, $endDate])
+                    ->groupBy('school_id');
 
-                    $todayVisits = $school->numberVisit
-                        ->filter(function ($visit) {
-                            return Carbon::parse($visit->created_at)->isToday();
-                        });
-
-                    $monthVisti = $school->numberVisit
-                        ->filter(
-                            fn($visit) =>
-                            Carbon::parse($visit->created_at)->isSameMonth(now())
-                        );
-
-                    $yearVisit = $school->numberVisit
-                        ->filter(
-                            fn($visit) =>
-                            Carbon::parse($visit->created_at)->isSameYear(now())
-                        );
-
-                    $customDateVisit = ($startDate && $endDate)
-                        ? $school->numberVisit->filter(function ($visit) use ($startDate, $endDate) {
-                            $createdAt = Carbon::parse($visit->created_at);
-                            return $createdAt->between($startDate, $endDate);
-                        })
-                        : collect();
-
-                    $totalVisits = $school->numberVisit->sum('totalNumberVisit');
-
-                    $filteredVisitCount = $customDateVisit->sum('totalNumberVisit');
-
-                    // If date range is provided and filtered visit is 0, return null
-                    if ($startDate && $endDate && $filteredVisitCount === 0) {
-                        return null;
-                    }
-
-                    return [
-                        'school_id' => $school->id,
-                        'school_name' => $school->school_name,
-                        'today_visit' => $todayVisits->sum('totalNumberVisit'),
-                        'month_visit' => $monthVisti->sum('totalNumberVisit'),
-                        'total_visit' => $totalVisits,
-                        'year_visit' => $yearVisit->sum('totalNumberVisit'),
-                        'FilteredVisit' => $filteredVisitCount,
-                    ];
-                });
-
-            // If date range is provided
-            if ($request->filled('start_date') && $request->filled('end_date')) {
-                // Filter out null values (schools with zero visits) and sort
-                $filteredData = collect($getNumberOfVisit->items())
-                    ->filter()  // Remove null values
-                    ->sortByDesc('FilteredVisit')
-                    ->values()
-                    ->all();
-
-                // Replace the items with filtered and sorted data
-                $getNumberOfVisit->setCollection(collect($filteredData));
+                $baseQuery->leftJoinSub($filteredSub, 'fv', function ($join) {
+                    $join->on('fv.school_id', '=', 's.id');
+                })->addSelect(DB::raw('COALESCE(fv.FilteredVisit, 0) as FilteredVisit'));
+            } else {
+                $baseQuery->addSelect(DB::raw('0 as FilteredVisit'));
             }
+
+            // Apply sorting
+            if ($sortColumn && $sortDirection) {
+                $columnMap = [
+                    'school_name' => 's.school_name',
+                    'today_visit' => 'today_visit',
+                    'month_visit' => 'month_visit',
+                    'total_visit' => 'total_visit',
+                    'year_visit' => 'year_visit',
+                    'FilteredVisit' => 'FilteredVisit',
+                ];
+                $dbCol = $columnMap[$sortColumn] ?? 's.created_at';
+                $baseQuery->orderBy($dbCol, $sortDirection);
+            } else {
+                // default sorting: show latest data (most recent visit activity first)
+                $baseQuery->orderByRaw('MAX(v.created_at) DESC, COALESCE(SUM(v.totalNumberVisit), 0) DESC, s.created_at DESC');
+            }
+
+            // Clone for total count (without offset/limit)
+            $allRows = $baseQuery->get();
+
+            // If date range is provided, filter out rows where FilteredVisit is 0
+            if ($startDate && $endDate) {
+                $allRows = $allRows->filter(function ($row) {
+                    return (int)($row->FilteredVisit ?? 0) > 0;
+                })->values();
+            }
+
+            $totalCount = $allRows->count();
+            $paginated = $allRows->slice($offset, $limit)->values();
+            $hasMore = ($offset + $limit) < $totalCount;
 
             return response()->json([
                 'success' => true,
-                'current_page' => $getNumberOfVisit->currentPage(),
-                'data' => $getNumberOfVisit->items(),
-                'first_page_url' => $getNumberOfVisit->url(1),
-                'from' => $getNumberOfVisit->firstItem(),
-                'last_page' => $getNumberOfVisit->lastPage(),
-                'last_page_url' => $getNumberOfVisit->url($getNumberOfVisit->lastPage()),
-                'next_page_url' => $getNumberOfVisit->nextPageUrl(),
-                'path' => $getNumberOfVisit->path(),
-                'per_page' => $getNumberOfVisit->perPage(),
-                'prev_page_url' => $getNumberOfVisit->previousPageUrl(),
-                'to' => $getNumberOfVisit->lastItem(),
-                'total' => $getNumberOfVisit->total()
+                'data' => $paginated,
+                'has_more' => $hasMore,
+                'total' => $totalCount,
+                'offset' => $offset,
+                'limit' => $limit
             ]);
         } catch (\Exception $e) {
             return response()->json([

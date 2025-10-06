@@ -26,7 +26,8 @@ class stp_course extends Model
         'course_logo',
         'course_status',
         'updated_by',
-        'created_by'
+        'created_by',
+        'is_free_course'
     ];
 
     public function school(): BelongsTo

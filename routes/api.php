@@ -167,6 +167,8 @@ Route::prefix('admin')->middleware('auth:sanctum')->group(function () {
     Route::post('/applicantDetailHigherTranscript', [AdminController::class, 'applicantDetailHigherTranscript']);
     Route::post('/applicantDetailTranscript', [AdminController::class, 'applicantDetailTranscript']);
 
+    Route::post('/getOffersFreeCourse', [AdminController::class, 'getOffersFreeCourse']);
+    Route::post('/getFreeEducationScheme', [AdminController::class, 'getFreeEducationScheme']);
 
     Route::post('/replyEnquiry', [EnquiryController::class, 'replyEnquiry']);
 

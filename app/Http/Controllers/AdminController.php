@@ -23,6 +23,7 @@ use App\Models\stp_courses_category;
 use App\Models\stp_cocurriculum;
 use App\Models\stp_featured;
 use App\Models\stp_featured_request;
+use App\Models\stp_free_education;
 use App\Models\stp_school;
 use App\Models\stp_school_media;
 use App\Models\stp_submited_form;
@@ -588,10 +589,14 @@ class AdminController extends Controller
                 'person_in_charge_contact' => 'required|string|max:255',
                 'person_in_charge_email' => 'required|email',
                 'category' => 'required|integer',
-                'account' => 'required|integer'
+                'account' => 'required|integer',
+                'free_education_id' => 'nullable|integer'
             ]);
 
             $authUser = Auth::user();
+
+            \Log::info('createSchool request data:', $request->all());
+
 
             // Check email
             $checkingEmail = stp_school::where('school_email', $request->email)->where('school_status', 1)->exists();
@@ -653,7 +658,8 @@ class AdminController extends Controller
                 'account_type' => $request->account,
                 'school_location' => $iframeCode,
                 'school_status' => 3,
-                'created_by' => $authUser->id
+                'created_by' => $authUser->id,
+                'free_education_id' => $request->free_education_id
             ]);
 
             // Handle cover photo
@@ -774,11 +780,13 @@ class AdminController extends Controller
                 'category' => 'nullable|integer',
                 'school_website' => 'nullable|string',
                 'account' => 'required|integer',
-
+                'free_education' => 'nullable|integer'
             ]);
 
             $authUser = Auth::user();
 
+
+            \Log::info('EditSchool request data:', $request->all());
 
             // Check if contact number is used by another school
             if ($request->country_code !== null &&  $request->contact_number !== null) {
@@ -934,7 +942,8 @@ class AdminController extends Controller
                 'person_inChargeNumber' => $request->person_in_charge_contact,
                 'person_inChargeName' => $request->person_in_charge_name,
                 'account_type' => $request->account,
-                'updated_by' => $authUser->id
+                'updated_by' => $authUser->id,
+                'free_education_id' => $request->free_education
             ];
 
             // Only update password if it's provided
@@ -1115,7 +1124,12 @@ class AdminController extends Controller
                     'PIC_email' => $school->person_inChargeEmail,
                     'account' => $school->account_type,
                     'location' => $school->school_location,
-                    'media' => $medias // Filtered media data
+                    'media' => $medias, // Filtered media data
+                    'free_education' => $school->free_education_id ? [
+                        'id' => $school->free_education_id,
+                        'scheme_name' => $school->freeEducation->scheme_name ?? null,
+                        'state_id' => $school->freeEducation->state_id
+                    ] : null,
                 ]
             ]);
         } catch (\Exception $e) {
@@ -1262,6 +1276,7 @@ class AdminController extends Controller
                 'category' => 'required|integer',
                 'qualification' => 'required|integer',
                 'logo' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:10000',
+                'free_course' => 'boolean'
             ]);
 
             $authUser = Auth::user();
@@ -1292,7 +1307,8 @@ class AdminController extends Controller
                 'course_logo' => $imagePath ?? '',
                 'created_by' => $authUser->id,
                 'course_status' => 1,
-                'created_at' => now()
+                'created_at' => now(),
+                'is_free_course' => $request->free_course,
             ]);
 
             foreach ($request->intake as $intakeMonth) {
@@ -1456,6 +1472,55 @@ class AdminController extends Controller
         }
     }
 
+    // checks if the school offers free education
+    public function getOffersFreeCourse(Request $request)
+    {
+        $request->validate([
+            'school_id' => 'required|integer'
+        ]);
+
+        $authUser = Auth::user();
+
+        $data = stp_school::where('stp_schools.id', $request->school_id)
+            ->leftJoin('stp_free_education', 'stp_schools.free_education_id', '=', 'stp_free_education.id')
+            ->select('stp_schools.free_education_id', 'stp_free_education.scheme_name')
+            ->first();
+
+        return response()->json([
+            'school_id' => $request->school_id,
+            'offers_free_course' => $data->free_education_id,
+            'scheme_name' => $data->scheme_name
+        ]);
+    }
+
+    // checks if the state has free education scheme
+    public function getFreeEducationScheme(Request $request)
+    {
+        $request->validate([
+            'state_id' => 'required|integer'
+        ]);
+
+        $scheme = stp_free_education::where('state_id', $request->state_id)
+            ->where('data_status', 1)
+        ->first();
+
+        if (!$scheme) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No free education scheme found for this state'
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'id' => $scheme->id,
+                'scheme_name' => $scheme->scheme_name,
+                'state_id' => $scheme->state_id
+            ]
+        ]);
+    }
+
     public function courseDetail(Request $request)
     {
         try {
@@ -1516,7 +1581,10 @@ class AdminController extends Controller
                 'qualification_name' => $courseList->qualification->qualification_name,
                 'mode' => $courseList->studyMode->id,
                 'logo' => $logo,
-                'tag' => $tagList
+                'tag' => $tagList,
+                'free_course' => $courseList->is_free_course,
+                'offers_free_course' => $courseList->school->free_education_id ?? null,
+                'scheme_name' => $courseList->school->freeEducation->scheme_name ?? null
             ];
 
             // Return the final response
@@ -1565,7 +1633,7 @@ class AdminController extends Controller
                 'description' => 'nullable|string|max:5000',
                 'requirement' => 'nullable|string|',
                 'cost' => ['nullable', 'regex:/^\d+(\.\d{1,2})?$/'],
-                'international_cost' => ['nullable', 'regex:/^\d+(\.\d{1,2})?$/'],
+                'international_cost' => 'nullable',
                 'period' => 'nullable|string|max:255',
                 'intake' => 'nullable|array',
                 'intake.*' => 'nullable|integer|between:41,52',
@@ -1574,9 +1642,17 @@ class AdminController extends Controller
                 'category' => 'required|integer',
                 'qualification' => 'required|nullable|integer',
                 'logo' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:10000',
+                'free_course' => 'boolean'
             ]);
 
+            \Log::info('Edit course request data:', $request->all());    
+
             // Check if the course already exists with a different ID
+            $checkingCourse = stp_course::where('school_id', $request->schoolID)
+                ->where('course_name', $request->name)
+                ->where('id', '!=', $request->id)
+                ->exists();
+
             $checkingCourse = stp_course::where('school_id', $request->schoolID)
                 ->where('course_name', $request->name)
                 ->where('id', '!=', $request->id)
@@ -1587,6 +1663,9 @@ class AdminController extends Controller
                     "courses" => ['Course already exists in the school']
                 ]);
             }
+
+            \Log::info('Attempting to fetch course with ID:', ['id' => $request->id]);
+            \Log::info('log check int course', ['international_cost' => $request->international_cost]);
 
             // Find the course to update
             $course = stp_course::findOrFail($request->id);
@@ -1604,6 +1683,8 @@ class AdminController extends Controller
                 $imagePath = $image->storeAs('courseLogo', $imageName, 'public');
             }
 
+            \Log::info('Reached updated course log line');
+
             // Update course details
             $course->update([
                 'school_id' => $request->schoolID,
@@ -1611,14 +1692,17 @@ class AdminController extends Controller
                 'course_description' => $request->description ?? null,
                 'course_requirement' => $request->requirement,
                 'course_cost' => $request->cost,
-                'international_cost' => $request->international_cost ?? null,
+                'international_cost' => ($request->international_cost === "null" || $request->international_cost === "") ? null : $request->international_cost ,
                 'course_period' => $request->period,
                 'category_id' => $request->category,
                 'qualification_id' => $request->qualification,
                 'course_logo' => $imagePath ?? $course->course_logo,
                 'updated_by' => $authUser->id,
+                'is_free_course' => $request->free_course,
                 'updated_at' => now()
             ]);
+
+            \Log::info('Updated course data:', $course->fresh()->toArray());
 
             // Handle intake months
             $existingIntakes = stp_intake::where('course_id', $request->id)

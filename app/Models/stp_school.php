@@ -39,8 +39,14 @@ class stp_school extends Model
         'account_type',
         'school_logo',
         'created_by',
-        'updated_by'
+        'updated_by',
+        'free_education_id'
     ];
+
+    public function freeEducation()
+    {
+        return $this->belongsTo(stp_free_education::class, 'free_education_id', 'id');
+    }
 
     public function socialMedia()
     {

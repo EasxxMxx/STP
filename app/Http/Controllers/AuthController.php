@@ -175,7 +175,9 @@ class AuthController extends Controller
                 ]);
             }
 
-            $user = stp_student::where('student_countryCode', $request->country_code)
+            $user = stp_student::select('stp_students.*', 'stp_student_details.state_id')
+                ->leftJoin('stp_student_details', 'stp_students.id', '=', 'stp_student_details.student_id')
+                ->where('student_countryCode', $request->country_code)
                 ->where('student_contactNo', $request->contact_number)
                 ->first();
 

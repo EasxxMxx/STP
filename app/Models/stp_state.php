@@ -25,4 +25,10 @@ class stp_state extends Model
     {
         return $this->belongsTo(stp_country::class, 'country_id', 'id');
     }
+
+    public function freeEducations()
+    {
+        return $this->hasMany(stp_free_education::class, 'state_id', 'id');
+    }
+
 }

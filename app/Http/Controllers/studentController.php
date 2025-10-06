@@ -991,9 +991,12 @@ class studentController extends Controller
                     'country' => $course->school->country->country_name ?? null,
                     'country_code' => $course->school->country->country_code ?? null,
                     'state' => $course->school->state->state_name ?? null,
+                    'state_id' => $course->school->state->id ?? null,
                     'institute_category' => $course->school->institueCategory->core_metaName ?? null,
                     'school_location' => $course->school->school_google_map_location,
-                    'course_status' => $course->course_status
+                    'course_status' => $course->course_status,
+                    'is_free_course' => $course->is_free_course,
+                    'school_offers_free_course' => $course->school->free_education_id
                 ];
             })->values(); // Apply values() to reindex the data
 

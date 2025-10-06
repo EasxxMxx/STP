@@ -187,7 +187,10 @@ class SchoolController extends Controller
             if ($request->hasFile('logo')) {
                 $image = $request->file('logo');
                 $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('courseLogo', $imageName, 'public'); // Store in 'storage/app/public/images'
+                // Store directly in public/storage/courseLogo/
+                $destinationPath = public_path('storage/courseLogo');
+                $image->move($destinationPath, $imageName);
+                $imagePath = 'courseLogo/' . $imageName;
             }
 
             $createCourse = stp_course::create([
@@ -363,10 +366,17 @@ class SchoolController extends Controller
                 }
             }
 
-            if (empty($getCourseDetail->course_logo)) {
-                $course_logo = $getCourseDetail->school->school_logo;
-            } else {
-                $course_logo = $getCourseDetail->course_logo;
+            // Only use course logo if it exists, don't fallback to school logo
+            $course_logo = $getCourseDetail->course_logo;
+            // Server-side verify the file actually exists; if missing, null it out
+            if (!empty($course_logo)) {
+                $publicStoragePath = public_path('storage/' . $course_logo);
+                if (!file_exists($publicStoragePath)) {
+                    $course_logo = null;
+                    // Proactively clean the broken reference to avoid persisting the bug
+                    $getCourseDetail->course_logo = null;
+                    $getCourseDetail->save();
+                }
             }
 
             $data = [
@@ -390,6 +400,7 @@ class SchoolController extends Controller
                     'studyModeName' => $getCourseDetail->studyMode->core_metaName
                 ],
                 'course_logo' => $course_logo,
+                'school_logo' => $getCourseDetail->school->school_logo,
             ];
 
             return response()->json([
@@ -405,6 +416,58 @@ class SchoolController extends Controller
         }
     }
 
+    public function removeCourseThumbnail(Request $request)
+    {
+        try {
+            $authUser = Auth::user();
+            $request->validate([
+                'courseID' => 'required|integer'
+            ]);
+
+            $course = stp_course::where('id', $request->courseID)
+                ->where('school_id', $authUser->id)
+                ->first();
+
+            if (empty($course)) {
+                throw ValidationException::withMessages([
+                    'course' => ['Course does not exist in your institute']
+                ]);
+            }
+
+            // Delete the thumbnail file if it exists
+            if (!empty($course->course_logo)) {
+                $filePath = public_path('storage/' . $course->course_logo);
+                if (file_exists($filePath)) {
+                    unlink($filePath);
+                }
+            }
+
+            // Update course to remove logo
+            $course->update([
+                'course_logo' => null,
+                'updated_by' => $authUser->id,
+                'updated_at' => now()
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Course thumbnail removed successfully'
+            ]);
+
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => "Validation Error",
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => "Internal Server Error",
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 
     public function editCourse(Request $request)
     {
@@ -435,13 +498,30 @@ class SchoolController extends Controller
 
             $courses = stp_course::find($request->id);
             $imagePath = "";
+            // If frontend indicates the existing logo should be removed and no new file is uploaded
+            if ($request->input('removeLogo') && !$request->hasFile('logo')) {
+                if (!empty($courses->course_logo)) {
+                    $oldFilePath = public_path('storage/' . $courses->course_logo);
+                    if (file_exists($oldFilePath)) {
+                        @unlink($oldFilePath);
+                    }
+                }
+                $courses->course_logo = null;
+            }
             if ($request->hasFile('logo')) {
                 if (!empty($courses->course_logo)) {
-                    Storage::delete('public/' . $courses->course_logo);
+                    // Delete old file from public/storage/courseLogo/
+                    $oldFilePath = public_path('storage/' . $courses->course_logo);
+                    if (file_exists($oldFilePath)) {
+                        unlink($oldFilePath);
+                    }
                 }
                 $image = $request->file('logo');
                 $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('courseLogo', $imageName, 'public'); // Store in 'storage/app/public/images'
+                // Store directly in public/storage/courseLogo/
+                $destinationPath = public_path('storage/courseLogo');
+                $image->move($destinationPath, $imageName);
+                $imagePath = 'courseLogo/' . $imageName;
             }
 
             $data = [
@@ -780,6 +860,7 @@ class SchoolController extends Controller
                         "course_name" => $applicant->course->course_name ?? 'N/A',
                         "institution" => $applicant->course->school->school_name,
                         "form_status" => $status,
+                        "reminder_clicked" => $applicant->reminder_clicked,
                         "country_code" => $applicant->student->student_countryCode ?? 'N/A',
                         "contact_number" => $applicant->student->student_contactNo ?? 'N/A',
                         "student_id" => $applicant->student->id,

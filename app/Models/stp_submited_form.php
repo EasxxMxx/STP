@@ -15,6 +15,7 @@ class stp_submited_form extends Model
         'courses_id',
         'form_status',
         'form_feedback',
+        'reminder_clicked',
         'updated_by',
         'created_by',
         'created_at',

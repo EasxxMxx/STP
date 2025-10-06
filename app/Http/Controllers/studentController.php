@@ -343,8 +343,8 @@ class studentController extends Controller
                 $monthList = [];
                 foreach ($school->courses as $courses) {
                     foreach ($courses->intake as $c) {
-                        $monthName = $c->month->core_metaName;
-                        if (!in_array($monthName, $monthList)) {
+                        $monthName = $c->month->core_metaName ?? null;
+                        if ($monthName && !in_array($monthName, $monthList)) {
                             $monthList[] = $monthName;
                         }
                     }
@@ -398,7 +398,8 @@ class studentController extends Controller
                 'last_page_url' => $paginator->url($paginator->lastPage()),
                 'next_page_url' => $paginator->nextPageUrl(),
                 'path' => $paginator->path(),
-                'links' => $paginator->links(),
+                // Avoid rendering Blade pagination links in JSON to prevent cache path errors
+                'links' => [],
                 'per_page' => $paginator->perPage(),
                 'prev_page_url' => $paginator->previousPageUrl(),
                 'to' => $paginator->lastItem(),
@@ -2283,11 +2284,15 @@ class studentController extends Controller
             ]);
             $form = stp_submited_form::find($request->formID);
 
+            // Increment the reminder_clicked counter
+            $form->increment('reminder_clicked');
+
             $authUser = Auth::user();
             $this->serviceFunctionController->sendReminder($form, $authUser, $request->formID);
             return response()->json([
                 'success' => true,
-                'data' => 'Send Reminder successfully'
+                'data' => 'Send Reminder successfully',
+                'reminder_count' => $form->fresh()->reminder_clicked
             ]);
         } catch (ValidationException $e) {
             return response()->json([
@@ -4250,7 +4255,8 @@ class studentController extends Controller
             if (empty($validateExsitData)) {
                 $formData = [
                     'school_id' => $schoolId,
-                    'totalNumberVisit' => 1
+                    'totalNumberVisit' => 1,
+                    'status' => 1
                 ];
                 $createData = stp_totalNumberVisit::create($formData);
                 if ($createData) {

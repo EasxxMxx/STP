@@ -168,7 +168,11 @@ Route::prefix('admin')->middleware('auth:sanctum')->group(function () {
     Route::post('/applicantDetailTranscript', [AdminController::class, 'applicantDetailTranscript']);
 
     Route::post('/getOffersFreeCourse', [AdminController::class, 'getOffersFreeCourse']);
-    Route::post('/getFreeEducationScheme', [AdminController::class, 'getFreeEducationScheme']);
+    Route::post('/getFreeEducation', [AdminController::class, 'getFreeEducation']);
+    Route::post('/updateFreeEducation', [AdminController::class, 'updateFreeEducation']);
+    Route::post('/addFreeEducation', [AdminController::class, 'addFreeEducation']);
+    Route::post('/getFreeEducationDetails', [AdminController::class, 'getFreeEducationDetails']);
+    Route::post('/getFreeEducationIdWithSchool', [AdminController::class, 'getFreeEducationIdWithSchool']);
 
     Route::post('/replyEnquiry', [EnquiryController::class, 'replyEnquiry']);
 

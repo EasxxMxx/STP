@@ -24,6 +24,8 @@ use App\Models\stp_cocurriculum;
 use App\Models\stp_featured;
 use App\Models\stp_featured_request;
 use App\Models\stp_free_education;
+use App\Models\stp_school_free_education;
+use App\Models\stp_course_free_education;
 use App\Models\stp_school;
 use App\Models\stp_school_media;
 use App\Models\stp_submited_form;
@@ -564,14 +566,17 @@ class AdminController extends Controller
                 'city' => 'nullable|integer',
                 'category' => 'nullable|integer',
                 'offset' => 'nullable|integer|min:0',
+                'limit' => 'nullable|integer|min:-1', // <-- Added limit validation
                 'sort_column' => 'nullable|string|in:name,email,contact,category,status',
                 'sort_direction' => 'nullable|string|in:asc,desc'
             ]);
 
             $offset = $request->offset ?? 0;
-            $limit = 10; // Fixed limit of 10 items per request
+            $limit = $request->has('limit') ? (int)$request->limit : 10; // default = -1 (no limit)
             $sortColumn = $request->sort_column ?? null;
             $sortDirection = $request->sort_direction ?? null;
+
+            \Log::info('SchoolList limit value:', ['limit' => $limit, 'raw' => $request->limit]);
 
             // Base query with eager loaded relations to prevent N+1
             $query = stp_school::with(['institueCategory', 'country', 'state', 'city'])
@@ -618,8 +623,12 @@ class AdminController extends Controller
             // Total count before pagination
             $totalCount = (clone $query)->toBase()->count();
 
-            // Fetch only current page
-            $pageSchools = $query->skip($offset)->take($limit)->get();
+            // Apply limit and offset unless limit == -1 or 0 (no limit)
+            if ($limit > 0) {
+                $query->skip($offset)->take($limit);
+            }
+
+            $pageSchools = $query->get();
 
             // Map to output shape
             $processedData = $pageSchools->map(function ($school) {
@@ -665,7 +674,7 @@ class AdminController extends Controller
                 })->values();
             }
 
-            $hasMore = ($offset + $limit) < $totalCount;
+            $hasMore = $limit > 0 ? ($offset + $limit) < $totalCount : false;
 
             return response()->json([
                 'success' => true,
@@ -704,7 +713,6 @@ class AdminController extends Controller
                 'person_in_charge_email' => 'required|email',
                 'category' => 'required|integer',
                 'account' => 'required|integer',
-                'free_education_id' => 'nullable|integer'
             ]);
 
             $authUser = Auth::user();
@@ -773,7 +781,6 @@ class AdminController extends Controller
                 'school_location' => $iframeCode,
                 'school_status' => 3,
                 'created_by' => $authUser->id,
-                'free_education_id' => $request->free_education_id
             ]);
 
             // Handle cover photo
@@ -894,7 +901,6 @@ class AdminController extends Controller
                 'category' => 'nullable|integer',
                 'school_website' => 'nullable|string',
                 'account' => 'required|integer',
-                'free_education' => 'nullable|integer'
             ]);
 
             $authUser = Auth::user();
@@ -1057,7 +1063,6 @@ class AdminController extends Controller
                 'person_inChargeName' => $request->person_in_charge_name,
                 'account_type' => $request->account,
                 'updated_by' => $authUser->id,
-                'free_education_id' => $request->free_education
             ];
 
             // Only update password if it's provided
@@ -1377,7 +1382,7 @@ class AdminController extends Controller
     {
         try {
 
-            $request->validate([
+            $validated = $request->validate([
                 'name' => 'required|string|max:255',
                 'schoolID' => 'required|integer',
                 'description' => 'string|max:5000',
@@ -1390,8 +1395,11 @@ class AdminController extends Controller
                 'category' => 'required|integer',
                 'qualification' => 'required|integer',
                 'logo' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:10000',
-                'free_course' => 'boolean'
+                'free_education_schemes' => 'nullable|array',
+                'free_education_schemes.*' => 'integer|exists:stp_free_education,id',
             ]);
+
+            \Log::info('Validated Add Course Data:', $validated);
 
             $authUser = Auth::user();
             $checkingCourse = stp_course::where('school_id', $request->schoolID)
@@ -1436,6 +1444,20 @@ class AdminController extends Controller
                     'intake_status' => 1,
                     'created_at' => now()
                 ]);
+            }
+
+            // Handle offered schools if any
+            $freeEducationSchemes = $request->input('free_education_schemes', []);
+
+            if (!empty($freeEducationSchemes)) {
+                foreach ($freeEducationSchemes as $freeEducationId) {
+                    stp_course_free_education::create([
+                        'course_id' => $course->id,
+                        'free_education_id' => $freeEducationId,
+                        'created_by' => $authUser->id,
+                        'updated_by' => $authUser->id,
+                    ]);
+                }
             }
 
             // foreach ($request->courseFeatured as $courseFeatured) {
@@ -1638,52 +1660,288 @@ class AdminController extends Controller
     }
 
     // checks if the school offers free education
-    public function getOffersFreeCourse(Request $request)
+    public function getFreeEducationIdWithSchool(Request $request)
     {
-        $request->validate([
-            'school_id' => 'required|integer'
-        ]);
+        try {
+            $request->validate([
+                'school_id' => 'required|integer'
+            ]);
 
-        $authUser = Auth::user();
+            $data = stp_school_free_education::where('school_id', $request->school_id)
+                ->where('stp_school_free_education.data_status', 1)
+                ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->select('stp_school_free_education.free_education_id', 'stp_free_education.scheme_name')
+                ->get();
 
-        $data = stp_school::where('stp_schools.id', $request->school_id)
-            ->leftJoin('stp_free_education', 'stp_schools.free_education_id', '=', 'stp_free_education.id')
-            ->select('stp_schools.free_education_id', 'stp_free_education.scheme_name')
-            ->first();
+            if ($data->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No free education scheme found for this school'
+                ], 404);
+            }
 
-        return response()->json([
-            'school_id' => $request->school_id,
-            'offers_free_course' => $data->free_education_id,
-            'scheme_name' => $data->scheme_name
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => $data
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     // checks if the state has free education scheme
-    public function getFreeEducationScheme(Request $request)
+    public function getFreeEducation()
     {
-        $request->validate([
-            'state_id' => 'required|integer'
-        ]);
+        // Fetch all active free education schemes
+        $schemes = stp_free_education::where('data_status', 1)->get();
 
-        $scheme = stp_free_education::where('state_id', $request->state_id)
-            ->where('data_status', 1)
-        ->first();
-
-        if (!$scheme) {
+        if ($schemes->isEmpty()) {
             return response()->json([
                 'success' => false,
-                'message' => 'No free education scheme found for this state'
+                'message' => 'No free education scheme found'
             ]);
         }
 
         return response()->json([
             'success' => true,
-            'data' => [
-                'id' => $scheme->id,
-                'scheme_name' => $scheme->scheme_name,
-                'state_id' => $scheme->state_id
-            ]
+            'data' => $schemes->map(function ($scheme) {
+                return [
+                    'id' => $scheme->id,
+                    'scheme_name' => $scheme->scheme_name,
+                    'description' => $scheme->description,
+                    'text_color_code' => $scheme->text_color_code,
+                    'background_color_code' => $scheme->background_color_code,
+                    'updated_by' => $scheme->updated_by,
+                    'created_by' => $scheme->created_by,
+                    'updated_at' => $scheme->updated_at,
+                    'created_at' => $scheme->created_at,
+                ];
+            })
         ]);
+    }
+
+    public function addFreeEducation(Request $request)
+    {
+        try {
+            $authUser = Auth::user();
+            $request->validate([
+                'scheme_name' => 'required|string|max:255',
+                'description' => 'nullable|string|max:1000',
+                'text_color_code' => 'nullable|string|max:7',
+                'background_color_code' => 'nullable|string|max:7',
+                'offered_by_schools' => 'nullable|array',
+                'offered_by_schools.*' => 'integer|exists:stp_schools,id',
+            ]);
+
+            // Log all request data for debugging
+            // Log::info('Received free education scheme data:', [
+            //     'scheme_name' => $request->scheme_name,
+            //     'description' => $request->description,
+            //     'text_color_code' => $request->text_color_code,
+            //     'background_color_code' => $request->background_color_code,
+            //     'offered_by_schools' => $request->offered_by_schools,
+            // ]);
+
+            // Create the free education scheme first
+            $scheme = stp_free_education::create([
+                'scheme_name' => $request->scheme_name,
+                'description' => $request->description,
+                'text_color_code' => $request->text_color_code,
+                'background_color_code' => $request->background_color_code,
+                'data_status' => 1,
+                'created_by' => $authUser->id,
+                'updated_by' => $authUser->id,
+            ]);
+
+            // Handle offered schools if any
+            $offeredSchools = $request->input('offered_by_schools', []);
+
+            if (!empty($offeredSchools)) {
+                foreach ($offeredSchools as $schoolId) {
+                    stp_school_free_education::create([
+                        'school_id' => $schoolId,
+                        'free_education_id' => $scheme->id,
+                        'created_by' => $authUser->id,
+                        'updated_by' => $authUser->id,
+                    ]);
+                }
+            }
+            
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => 'Successfully added new free education scheme']
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation Error',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }   
+
+    public function updateFreeEducation(Request $request)
+    {
+        try {
+            $authUser = Auth::user();
+            $request->validate([
+                'id' => 'required|integer|exists:stp_free_education,id',
+                'scheme_name' => 'required|string|max:255',
+                'description' => 'nullable|string|max:1000',
+                'text_color_code' => 'nullable|string|max:7',
+                'background_color_code' => 'nullable|string|max:7',
+                'offered_by_schools' => 'nullable|array',
+                'offered_by_schools.*' => 'integer|exists:stp_schools,id',
+            ]);
+
+            $scheme = stp_free_education::find($request->id);
+            if (!$scheme) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Free education scheme not found'
+                ], 404);
+            }
+
+            // Update scheme details
+            $scheme->update([
+                'scheme_name' => $request->scheme_name,
+                'description' => $request->description,
+                'text_color_code' => $request->text_color_code,
+                'background_color_code' => $request->background_color_code,
+                'updated_by' => $authUser->id,
+            ]);
+
+            // Handle offered schools
+            $offeredSchools = $request->input('offered_by_schools', []);
+            $existingSchools = stp_school_free_education::where('free_education_id', $scheme->id)
+                ->where('data_status', 1)
+                ->pluck('school_id')
+                ->toArray();
+
+            // Add new offered schools
+            $newSchools = array_diff($offeredSchools, $existingSchools);
+            foreach ($newSchools as $schoolId) {
+                stp_school_free_education::create([
+                    'school_id' => $schoolId,
+                    'free_education_id' => $scheme->id,
+                    'created_by' => $authUser->id,
+                    'updated_by' => $authUser->id,
+                ]);
+            }
+
+            // Update data_status to 0 for schools that are no longer offered
+            $removedSchools = array_diff($existingSchools, $offeredSchools);
+            if (!empty($removedSchools)) {
+                stp_school_free_education::where('free_education_id', $scheme->id)
+                    ->whereIn('school_id', $removedSchools)
+                    ->where('data_status', 1)
+                    ->update([
+                        'data_status' => 0,
+                        'updated_by' => $authUser->id,
+                        'updated_at' => now()
+                    ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => 'Successfully updated the free education scheme']
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation Error',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+
+    public function getFreeEducationDetails(Request $request) {
+        try {
+            $request->validate([
+                'id' => 'required|integer|exists:stp_free_education,id'
+            ]);
+
+            $scheme = stp_free_education::find($request->id);
+
+            if (!$scheme) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Free education scheme not found'
+                ], 404);
+            }
+
+            // Fetch schools that offer this free education scheme
+            $offeredBySchools = stp_school_free_education::where('free_education_id', $scheme->id)
+                ->where('data_status', 1)
+                ->join('stp_schools', 'stp_school_free_education.school_id', '=', 'stp_schools.id')
+                ->select('stp_schools.id', 'stp_schools.school_name')
+                ->get()
+                ->map(function($school) {
+                    return [
+                        'id' => $school->id,
+                        'name' => $school->school_name
+                    ];
+                })
+                ->toArray();
+
+            // Log::info('✅ Free education scheme retrieved successfully:', [
+            //     'id' => $scheme->id,
+            //     'scheme_name' => $scheme->scheme_name,
+            //     'description' => $scheme->description,
+            //     'text_color_code' => $scheme->text_color_code,
+            //     'background_color_code' => $scheme->background_color_code,
+            //     'created_by' => $scheme->created_by,
+            //     'updated_by' => $scheme->updated_by,
+            //     'created_at' => $scheme->created_at,
+            //     'updated_at' => $scheme->updated_at,
+            //     'offered_by_schools_count' => count($offeredBySchools)
+            // ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $scheme->id,
+                    'scheme_name' => $scheme->scheme_name,
+                    'description' => $scheme->description,
+                    'text_color_code' => $scheme->text_color_code,
+                    'background_color_code' => $scheme->background_color_code,
+                    'created_by' => $scheme->created_by,
+                    'updated_by' => $scheme->updated_by,
+                    'created_at' => $scheme->created_at,
+                    'updated_at' => $scheme->updated_at,
+                    'offered_by_schools' => $offeredBySchools
+                ]
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation Error',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     public function courseDetail(Request $request)
@@ -1729,6 +1987,12 @@ class AdminController extends Controller
             }
 
             // Prepare the course details
+            // Fetch course free education IDs
+            $courseFreeEducationIds = stp_course_free_education::where('course_id', $courseList->id)
+                ->where('data_status', 1)
+                ->pluck('free_education_id')
+                ->toArray();
+
             $courseListDetail = [
                 'id' => $courseList->id,
                 'course' => $courseList->course_name,
@@ -1749,7 +2013,8 @@ class AdminController extends Controller
                 'tag' => $tagList,
                 'free_course' => $courseList->is_free_course,
                 'offers_free_course' => $courseList->school->free_education_id ?? null,
-                'scheme_name' => $courseList->school->freeEducation->scheme_name ?? null
+                // 'scheme_name' => $courseList->school->freeEducation->scheme_name ?? null,
+                'course_free_education_ids' => $courseFreeEducationIds // Added array of free education IDs
             ];
 
             // Return the final response
@@ -1807,7 +2072,8 @@ class AdminController extends Controller
                 'category' => 'required|integer',
                 'qualification' => 'required|nullable|integer',
                 'logo' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:10000',
-                'free_course' => 'boolean'
+                'free_education_schemes' => 'nullable|array',
+                'free_education_schemes.*' => 'integer|exists:stp_free_education,id',
             ]);
 
             \Log::info('Edit course request data:', $request->all());    
@@ -1869,7 +2135,6 @@ class AdminController extends Controller
                 'qualification_id' => $request->qualification,
                 'course_logo' => $imagePath ?? $course->course_logo,
                 'updated_by' => $authUser->id,
-                'is_free_course' => $request->free_course,
                 'updated_at' => now()
             ]);
 
@@ -1945,6 +2210,39 @@ class AdminController extends Controller
                     ]);
             }
 
+            // Handle free education schemes
+            $existingSchemes = stp_course_free_education::where('course_id', $request->id)
+                ->where('data_status', 1)
+                ->pluck('free_education_id')
+                ->toArray();
+
+            $requestedSchemes = $request->input('free_education_schemes', []);
+
+            // Find schemes to add (ones in request but not in existing active records)
+            $schemesToAdd = array_diff($requestedSchemes, $existingSchemes);
+            foreach ($schemesToAdd as $schemeId) {
+                stp_course_free_education::create([
+                    'course_id' => $request->id,
+                    'free_education_id' => $schemeId,
+                    'data_status' => 1,
+                    'created_by' => $authUser->id,
+                    'updated_by' => $authUser->id,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
+            // Find schemes to deactivate (ones in existing but not in request)
+            $schemesToDeactivate = array_diff($existingSchemes, $requestedSchemes);
+            if (!empty($schemesToDeactivate)) {
+                stp_course_free_education::where('course_id', $request->id)
+                    ->whereIn('free_education_id', $schemesToDeactivate)
+                    ->update([
+                        'data_status' => 0,
+                        'updated_by' => $authUser->id,
+                        'updated_at' => now()
+                    ]);
+            }
 
             return response()->json([
                 'success' => true,

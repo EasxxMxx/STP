@@ -15,6 +15,8 @@ use App\Models\stp_qualification;
 use App\Models\stp_student_media;
 use Illuminate\Http\Request;
 use App\Models\stp_school;
+use App\Models\stp_school_free_education;
+use App\Models\stp_course_free_education;
 use App\Models\stp_student;
 use App\Models\stp_subject;
 use App\Models\stp_tag;
@@ -971,6 +973,36 @@ class studentController extends Controller
                     }
                 }
 
+                // Get school free education schemes
+                $schoolFreeEducationSchemes = stp_school_free_education::where('school_id', $course->school->id)
+                    ->where('stp_school_free_education.data_status', 1)
+                    ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                    ->select('stp_free_education.id', 'stp_free_education.scheme_name', 'stp_free_education.text_color_code', 'stp_free_education.background_color_code')
+                    ->get()
+                    ->map(function($scheme) {
+                        return [
+                            'id' => $scheme->id,
+                            'scheme_name' => $scheme->scheme_name,
+                            'text_color_code' => $scheme->text_color_code,
+                            'background_color_code' => $scheme->background_color_code
+                        ];
+                    })
+                    ->toArray();
+
+                // Get course free education schemes
+                $courseFreeEducationSchemes = stp_course_free_education::where('course_id', $course->id)
+                    ->where('stp_course_free_education.data_status', 1)
+                    ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
+                    ->select('stp_free_education.id', 'stp_free_education.scheme_name')
+                    ->get()
+                    ->map(function($scheme) {
+                        return [
+                            'id' => $scheme->id,
+                            'scheme_name' => $scheme->scheme_name
+                        ];
+                    })
+                    ->toArray();
+
                 return [
                     'school_id' => $course->school->id,
                     'email' => $course->school->school_email,
@@ -996,8 +1028,9 @@ class studentController extends Controller
                     'institute_category' => $course->school->institueCategory->core_metaName ?? null,
                     'school_location' => $course->school->school_google_map_location,
                     'course_status' => $course->course_status,
-                    'is_free_course' => $course->is_free_course,
-                    'school_offers_free_course' => $course->school->free_education_id
+                    // 'is_free_course' => $course->is_free_course,
+                    'school_free_education_schemes' => $schoolFreeEducationSchemes,
+                    'course_free_education_schemes' => $courseFreeEducationSchemes
                 ];
             })->values(); // Apply values() to reindex the data
 

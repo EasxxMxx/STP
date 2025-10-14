@@ -1433,7 +1433,6 @@ class AdminController extends Controller
                 'created_by' => $authUser->id,
                 'course_status' => 1,
                 'created_at' => now(),
-                'is_free_course' => $request->free_course,
             ]);
 
             foreach ($request->intake as $intakeMonth) {
@@ -1694,21 +1693,65 @@ class AdminController extends Controller
     }
 
     // checks if the state has free education scheme
-    public function getFreeEducation()
+    public function getFreeEducation(Request $request)
     {
-        // Fetch all active free education schemes
-        $schemes = stp_free_education::where('data_status', 1)->get();
-
-        if ($schemes->isEmpty()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No free education scheme found'
+        try {
+            $request->validate([
+                'search' => 'nullable|string',
+                'offset' => 'nullable|integer|min:0',
+                'limit' => 'nullable|integer|min:-1',
+                'sort_column' => 'nullable|string|in:description,scheme_name,text_color,background_color,status',
+                'sort_direction' => 'nullable|string|in:asc,desc'
             ]);
-        }
 
-        return response()->json([
-            'success' => true,
-            'data' => $schemes->map(function ($scheme) {
+            $offset = $request->offset ?? 0;
+            $limit = $request->has('limit') ? (int)$request->limit : 10;
+            $sortColumn = $request->sort_column ?? null;
+            $sortDirection = $request->sort_direction ?? null;
+
+            // Build base query with filters
+            $query = stp_free_education::where('data_status', 1)
+                ->when($request->filled('search'), function ($query) use ($request) {
+                    $query->where('scheme_name', 'like', '%' . $request->search . '%');
+                });
+
+            // Apply sorting
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'scheme_name') {
+                    $query->orderBy('scheme_name', $sortDirection);
+                } 
+                
+                // elseif ($sortColumn === 'text_color') {
+                //     $query->orderBy('text_color_code', $sortDirection);
+                // } elseif ($sortColumn === 'background_color') {
+                //     $query->orderBy('background_color_code', $sortDirection);
+                // } 
+                elseif ($sortColumn === 'description') {
+                    // Handle NULL values by using COALESCE or IFNULL
+                    $query->orderByRaw("COALESCE(description, '') " . $sortDirection);
+                }
+                elseif ($sortColumn === 'status') {
+                    $query->orderBy('data_status', $sortDirection);
+                } else {
+                    $query->orderBy('created_at', 'desc');
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Get total count before pagination
+            $totalCount = (clone $query)->count();
+
+            // Apply pagination if limit is not -1
+            if ($limit > 0) {
+                $query->skip($offset)->take($limit);
+            }
+
+            // Get results
+            $schemes = $query->get();
+
+            // Transform the data
+            $processedData = $schemes->map(function ($scheme) {
                 return [
                     'id' => $scheme->id,
                     'scheme_name' => $scheme->scheme_name,
@@ -1720,8 +1763,22 @@ class AdminController extends Controller
                     'updated_at' => $scheme->updated_at,
                     'created_at' => $scheme->created_at,
                 ];
-            })
-        ]);
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => $limit > 0 ? ($offset + $limit) < $totalCount : false
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     public function addFreeEducation(Request $request)

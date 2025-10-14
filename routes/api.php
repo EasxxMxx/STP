@@ -317,7 +317,8 @@ Route::prefix('school')->middleware('auth:sanctum')->group(function () {
     Route::post('/applicantResultSlip', [SchoolController::class, 'applicantResultSlip']);
     Route::post('/editApplicantStatus', [SchoolController::class, 'editApplicantStatus']);
     Route::post('/applicantDetailRelatedDocument', [SchoolController::class, 'applicantDetailRelatedDocument']);
-
+    Route::post('/getFreeEducationIdWithSchool', [SchoolController::class, 'getFreeEducationIdWithSchool']);
+    Route::post('/getFreeEducationIdWithCourse', [SchoolController::class, 'getFreeEducationIdWithCourse']);
 
 
     Route::get('/instituteType', [studentController::class, 'instituteType']);

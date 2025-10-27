@@ -18,6 +18,7 @@ use App\Models\stp_school;
 use App\Models\stp_school_free_education;
 use App\Models\stp_course_free_education;
 use App\Models\stp_student;
+use Illuminate\Support\Facades\DB;
 use App\Models\stp_subject;
 use App\Models\stp_tag;
 use App\Models\User;
@@ -25,7 +26,6 @@ use App\Models\stp_transcript;
 use App\Models\stp_submited_form;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\serviceFunctionController;
 use App\Models\stp_cgpa;
 use App\Models\stp_cocurriculum;
@@ -179,7 +179,8 @@ class studentController extends Controller
                 'institute' => 'integer',
                 'studyMode' => 'array',
                 'tuition_fee' => 'numeric',
-                'intake_month' => 'array'
+                'intake_month' => 'array',
+                'freeForSarawakian' => 'nullable|boolean'
             ]);
 
             $filterConditions = function ($query) use ($request) {
@@ -227,6 +228,16 @@ class studentController extends Controller
                             $query->whereHas('intake', function ($query) use ($request) {
                                 $query->whereIn('intake_month', $request->intake_month);
                             });
+                        });
+                    })
+                    ->when($request->has('freeForSarawakian') && $request->freeForSarawakian === true, function ($q) {
+                        // Filter schools that have free education schemes with free_education_id = 1
+                        $q->whereExists(function ($query) {
+                            $query->select(DB::raw(1))
+                                ->from('stp_school_free_education')
+                                ->whereColumn('stp_school_free_education.school_id', 'stp_schools.id')
+                                ->where('stp_school_free_education.free_education_id', 1)
+                                ->where('stp_school_free_education.data_status', 1);
                         });
                     });
             };
@@ -801,6 +812,9 @@ class studentController extends Controller
     {
 
         try {
+            // Debug: Log the request parameters
+            \Log::info('CourseList API Request:', $request->all());
+            
             $request->validate([
                 'search' => 'nullable|string',
                 'countryID' => 'integer',
@@ -811,7 +825,8 @@ class studentController extends Controller
                 'institute' => 'integer',
                 'studyMode' => 'array',
                 'tuitionFee' => 'numeric',
-                'intake' => 'array'
+                'intake' => 'array',
+                'freeForSarawakian' => 'nullable|boolean'
             ]);
 
             $filterConditions = function ($query) use ($request) {
@@ -857,6 +872,38 @@ class studentController extends Controller
                     ->when($request->filled('intake'), function ($q) use ($request) {
                         $q->whereHas('intake', function ($q) use ($request) {
                             $q->whereIn('intake_month', $request->intake);
+                        });
+                    })
+                    ->when($request->has('freeForSarawakian') && $request->freeForSarawakian === true, function ($q) {
+                        // Debug: Log that the filter is being applied
+                        \Log::info('Applying freeForSarawakian filter');
+                        
+                        // Debug: Check if there are any records in the tables
+                        $schoolFreeCount = DB::table('stp_school_free_education')
+                            ->where('free_education_id', 1)
+                            ->where('data_status', 1)
+                            ->count();
+                        $courseFreeCount = DB::table('stp_course_free_education')
+                            ->where('free_education_id', 1)
+                            ->where('data_status', 1)
+                            ->count();
+                        
+                        \Log::info("School free education records with id=1: {$schoolFreeCount}");
+                        \Log::info("Course free education records with id=1: {$courseFreeCount}");
+                        
+                        $q->whereExists(function ($query) {
+                            $query->select(DB::raw(1))
+                                ->from('stp_school_free_education')
+                                ->whereColumn('stp_school_free_education.school_id', 'stp_courses.school_id')
+                                ->where('stp_school_free_education.free_education_id', 1)
+                                ->where('stp_school_free_education.data_status', 1);
+                        })
+                        ->whereExists(function ($query) {
+                            $query->select(DB::raw(1))
+                                ->from('stp_course_free_education')
+                                ->whereColumn('stp_course_free_education.course_id', 'stp_courses.id')
+                                ->where('stp_course_free_education.free_education_id', 1)
+                                ->where('stp_course_free_education.data_status', 1);
                         });
                     });
             };

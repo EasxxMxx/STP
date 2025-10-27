@@ -32,8 +32,15 @@ class SocialLoginController extends Controller
             // Check if the user already exists in your database
             $existingUser = stp_student::where('facebook_id', $facebookUser->getId())->first();
             if ($existingUser) {
-                $token = $existingUser->createToken('authToken')->plainTextToken;
                 $user_id = $existingUser->id;
+                $user_name = $existingUser->student_userName;
+                if ($existingUser->student_countryCode === null && $existingUser->student_contactNo === null) {
+                    $contact = false;
+                    $token = null; // Don't create token if contact info is missing
+                } else {
+                    $contact = true;
+                    $token = $existingUser->createToken('authToken')->plainTextToken;
+                }
             } else {
                 $findExistingOfEmail = stp_student::where('student_email', $facebookUser->getEmail())->first();
                 if ($findExistingOfEmail) {
@@ -41,8 +48,15 @@ class SocialLoginController extends Controller
                         'facebook_id' => $facebookUser->getId(),
                     ];
                     $findExistingOfEmail->update($data);
-                    $token = $findExistingOfEmail->createToken('authToken')->plainTextToken;
+                    $user_name = $findExistingOfEmail->student_userName;
                     $user_id = $findExistingOfEmail->id;
+                    if ($findExistingOfEmail->student_countryCode === null && $findExistingOfEmail->student_contactNo === null) {
+                        $contact = false;
+                        $token = null; // Don't create token if contact info is missing
+                    } else {
+                        $contact = true;
+                        $token = $findExistingOfEmail->createToken('authToken')->plainTextToken;
+                    }
                 } else {
                     $data = [
                         'student_userName' => $facebookUser->getName(),
@@ -52,8 +66,10 @@ class SocialLoginController extends Controller
                     ];
                     $newUser = stp_student::create($data);
                     stp_student_detail::create(['student_id' => $newUser->id]);
-                    $token = $newUser->createToken('authToken')->plainTextToken;
+                    $user_name = $facebookUser->getName();
                     $user_id = $newUser->id;
+                    $contact = false;
+                    $token = null; // Don't create token for new users without contact info
                 }
             }
 
@@ -61,7 +77,8 @@ class SocialLoginController extends Controller
             $data = [
                 'token' => $token,
                 'id' => $user_id,
-                'user_name' => $facebookUser->getName()
+                'user_name' => $user_name,
+                'contact' => $contact
             ];
             $jsonData = json_encode($data);
 
@@ -167,19 +184,20 @@ class SocialLoginController extends Controller
     public function googleCallback()
     {
         try {
-            // Get the user from Facebook
+            // Get the user from Google
             $googleUser = Socialite::driver('google')->stateless()->user();
 
             // Check if the user already exists in your database
             $existingUser = stp_student::where('google_id', $googleUser->getId())->first();
             if ($existingUser) {
-                $token = $existingUser->createToken('authToken')->plainTextToken;
                 $user_id = $existingUser->id;
                 $user_name = $existingUser->student_userName;
                 if ($existingUser->student_countryCode === null && $existingUser->student_contactNo === null) {
                     $contact = false;
+                    $token = null; // Don't create token if contact info is missing
                 } else {
                     $contact = true;
+                    $token = $existingUser->createToken('authToken')->plainTextToken;
                 }
             } else {
                 $checkExistingOfEmail = stp_student::where('student_email', $googleUser->getEmail())->first();
@@ -189,12 +207,13 @@ class SocialLoginController extends Controller
                     ];
                     $checkExistingOfEmail->update($data);
                     $user_name = $checkExistingOfEmail->student_userName;
-                    $token = $checkExistingOfEmail->createToken('authToken')->plainTextToken;
                     $user_id = $checkExistingOfEmail->id;
                     if ($checkExistingOfEmail->student_countryCode === null && $checkExistingOfEmail->student_contactNo === null) {
                         $contact = false;
+                        $token = null; // Don't create token if contact info is missing
                     } else {
                         $contact = true;
+                        $token = $checkExistingOfEmail->createToken('authToken')->plainTextToken;
                     }
                 } else {
                     $data = [
@@ -206,9 +225,9 @@ class SocialLoginController extends Controller
                     $newUser = stp_student::create($data);
                     stp_student_detail::create(['student_id' => $newUser->id]);
                     $user_name = $googleUser->getName();
-                    $token = $newUser->createToken('authToken')->plainTextToken;
                     $user_id = $newUser->id;
                     $contact = false;
+                    $token = null; // Don't create token for new users without contact info
                 }
             }
 
@@ -218,32 +237,25 @@ class SocialLoginController extends Controller
                 'id' => $user_id,
                 'user_name' => $user_name,
                 'contact' => $contact
-
             ];
             $jsonData = json_encode($data);
-
 
             // Encrypt the JSON string
             $encryptedData = Crypt::encryptString($jsonData);
 
             // Redirect to your frontend page with encrypted data
-            // $redirectUrl = session('facebook_redirect', env('FRONTEND_REDIRECT_URL', 'http://localhost:5173/'));
-            $redirectUrl = session('facebook_redirect', env('FRONTEND_REDIRECT_URL', 'URL'));
+            $redirectUrl = session('google_redirect', env('FRONTEND_REDIRECT_URL', 'URL'));
 
-            session()->forget('facebook_redirect'); // Clear the session after use
-            // return redirect()->intended('https://www.youtube.com/');
+            session()->forget('google_redirect'); // Clear the session after use
             return redirect()->intended($redirectUrl . 'FacebookSocialPageRedirectPage?data=' . $encryptedData);
         } catch (\Exception $e) {
             // Handle cases like cancellation or errors during login
-            // $redirectUrl = session('facebook_redirect', env('FRONTEND_REDIRECT_URL', 'http://localhost:5173/'));
+            $redirectUrl = session('google_redirect', env('FRONTEND_REDIRECT_URL', 'URL'));
 
-            $redirectUrl = session('facebook_redirect', env('FRONTEND_REDIRECT_URL', 'URL'));
-            // $redirectUrl = session('', 'http://localhost:5174/SocialContactPage');
-
-            session()->forget('facebook_redirect'); // Clear the session after use
+            session()->forget('google_redirect'); // Clear the session after use
 
             // Redirect to your desired frontend page with an error message
-            return redirect($redirectUrl)->withErrors('Unable to login using Facebook.');
+            return redirect($redirectUrl)->withErrors('Unable to login using Google.');
         }
     }
 
@@ -278,10 +290,14 @@ class SocialLoginController extends Controller
 
             $findUser->update($updateData);
 
+            // Create token only after successful contact update
+            $token = $findUser->createToken('authToken')->plainTextToken;
+
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'message' => "Successfully update contact"
+                    'message' => "Successfully update contact",
+                    'token' => $token
                 ]
             ]);
         } catch (\Exception $e) {

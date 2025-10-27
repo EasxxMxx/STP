@@ -3844,4 +3844,30 @@ class SchoolController extends Controller
             ]);
         }
     }
+
+    public function reminderStatistics(Request $request)
+    {
+        try {
+            $authUser = Auth::user();
+            
+            // Get applications with status 2 (Pending), 5 (In Progress), or 6 (Waiting Approval)
+            $reminderCount = stp_submited_form::where('school_id', $authUser->id)
+                ->whereIn('form_status', [2, 5, 6]) // Include Pending, In Progress, and Waiting Approval
+                ->where('reminder_clicked', '>', 0) // Only count applications that have reminders
+                ->count();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_reminders' => $reminderCount
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => "Internal Server Error",
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
 }

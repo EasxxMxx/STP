@@ -7298,11 +7298,15 @@ class AdminController extends Controller
 
     public function totalNumberVisitSchoolList(Request $request)
     {
+        \Log::info('AdminVisit API Called', [
+            'request_data' => $request->all()
+        ]);
+        
         try {
             $request->validate([
                 'school_name' => 'nullable|string',
-                'start_date' => 'nullable|date|required_with:end_date',
-                'end_date' => 'nullable|date|required_with:start_date',
+                'start_date' => 'nullable|date',
+                'end_date' => 'nullable|date',
                 'offset' => 'nullable|integer|min:0',
                 'sort_column' => 'nullable|string|in:school_name,today_visit,month_visit,total_visit,year_visit,FilteredVisit',
                 'sort_direction' => 'nullable|string|in:asc,desc'
@@ -7315,12 +7319,23 @@ class AdminController extends Controller
 
             $startDate = $request->start_date ? Carbon::parse($request->start_date)->startOfDay() : null;
             $endDate = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : null;
+            
+            // Handle single date scenarios - only if at least one date is provided
+            if ($startDate && !$endDate) {
+                $endDate = $startDate->copy()->endOfDay();
+            } elseif (!$startDate && $endDate) {
+                $startDate = $endDate->copy()->startOfDay();
+            }
+            
 
+            
             // Build base query with SQL aggregations for performance
-            $baseQuery = stp_school::query()
-                ->from('stp_schools as s')
+            $baseQuery = DB::table('stp_schools as s')
                 ->leftJoin('stp_total_number_visits as v', 'v.school_id', '=', 's.id')
-                ->where('s.school_status', '!=', 0)
+                ->where(function($query) {
+                    $query->where('s.school_status', '!=', '0')
+                          ->orWhereNull('s.school_status');
+                })
                 ->when($request->school_name, function ($query, $schoolName) {
                     $query->where('s.school_name', 'like', '%' . $schoolName . '%');
                 })
@@ -7334,16 +7349,16 @@ class AdminController extends Controller
                 ])
                 ->groupBy('s.id', 's.school_name');
 
-            // Apply filtered visit only when date range is provided
-            if ($startDate && $endDate) {
-                $filteredSub = stp_totalNumberVisit::query()
+            // Apply filtered visit only when date range is provided (check for non-empty values)
+            if (!empty($request->start_date) || !empty($request->end_date)) {
+                $filteredSub = DB::table('stp_total_number_visits')
                     ->select('school_id', DB::raw('SUM(totalNumberVisit) as FilteredVisit'))
                     ->whereBetween('created_at', [$startDate, $endDate])
                     ->groupBy('school_id');
 
                 $baseQuery->leftJoinSub($filteredSub, 'fv', function ($join) {
                     $join->on('fv.school_id', '=', 's.id');
-                })->addSelect(DB::raw('COALESCE(fv.FilteredVisit, 0) as FilteredVisit'));
+                })->addSelect(DB::raw('COALESCE(MAX(fv.FilteredVisit), 0) as FilteredVisit'));
             } else {
                 $baseQuery->addSelect(DB::raw('0 as FilteredVisit'));
             }
@@ -7362,23 +7377,37 @@ class AdminController extends Controller
                 $baseQuery->orderBy($dbCol, $sortDirection);
             } else {
                 // default sorting: show latest data (most recent visit activity first)
-                $baseQuery->orderByRaw('MAX(v.created_at) DESC, COALESCE(SUM(v.totalNumberVisit), 0) DESC, s.created_at DESC');
+                $baseQuery->orderByRaw('COALESCE(SUM(v.totalNumberVisit), 0) DESC, s.created_at DESC');
             }
 
             // Clone for total count (without offset/limit)
             $allRows = $baseQuery->get();
+            
+            
 
-            // If date range is provided, filter out rows where FilteredVisit is 0
-            if ($startDate && $endDate) {
-                $allRows = $allRows->filter(function ($row) {
-                    return (int)($row->FilteredVisit ?? 0) > 0;
-                })->values();
+            // Only apply date range filtering if dates are provided in the original request (check for non-empty values)
+            if (!empty($request->start_date) || !empty($request->end_date)) {
+                // Check if there are any visits in the date range first
+                $hasVisitsInRange = DB::table('stp_total_number_visits')->whereBetween('created_at', [$startDate, $endDate])->exists();
+                
+                if ($hasVisitsInRange) {
+                    $allRows = $allRows->filter(function ($row) {
+                        return (int)($row->FilteredVisit ?? 0) > 0;
+                    })->values();
+                }
+                // If no visits in date range, show all schools with 0 FilteredVisit
             }
 
             $totalCount = $allRows->count();
             $paginated = $allRows->slice($offset, $limit)->values();
             $hasMore = ($offset + $limit) < $totalCount;
 
+            \Log::info('AdminVisit API Success', [
+                'data_count' => $paginated->count(),
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
+            
             return response()->json([
                 'success' => true,
                 'data' => $paginated,
@@ -7388,6 +7417,11 @@ class AdminController extends Controller
                 'limit' => $limit
             ]);
         } catch (\Exception $e) {
+            \Log::error('AdminVisit API Error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return response()->json([
                 'success' => false,
                 'message' => "Internal Server Error",

@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\User;
 // use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
+use Database\Seeders\TranscriptCategoriesSeeder;
 
 class DatabaseSeeder extends Seeder
 {
@@ -18,6 +19,11 @@ class DatabaseSeeder extends Seeder
         User::factory()->create([
             'name' => 'Test User',
             'email' => 'test@example.com',
+        ]);
+
+        // Ensure essential transcript categories exist
+        $this->call([
+            TranscriptCategoriesSeeder::class,
         ]);
     }
 }

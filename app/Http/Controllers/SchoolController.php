@@ -269,6 +269,7 @@ class SchoolController extends Controller
             $data = stp_school_free_education::where('school_id', $request->school_id)
                 ->where('stp_school_free_education.data_status', 1)
                 ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->where('stp_free_education.data_status', 1)
                 ->select('stp_school_free_education.free_education_id', 'stp_free_education.scheme_name')
                 ->get();
 
@@ -302,6 +303,7 @@ class SchoolController extends Controller
             $data = stp_course_free_education::where('course_id', $request->course_id)
                 ->where('stp_course_free_education.data_status', 1)
                 ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->where('stp_free_education.data_status', 1)
                 ->select('stp_course_free_education.free_education_id', 'stp_free_education.scheme_name')
                 ->get();
 

@@ -1669,6 +1669,7 @@ class AdminController extends Controller
             $data = stp_school_free_education::where('school_id', $request->school_id)
                 ->where('stp_school_free_education.data_status', 1)
                 ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->where('stp_free_education.data_status', 1)
                 ->select('stp_school_free_education.free_education_id', 'stp_free_education.scheme_name')
                 ->get();
 
@@ -1709,8 +1710,8 @@ class AdminController extends Controller
             $sortColumn = $request->sort_column ?? null;
             $sortDirection = $request->sort_direction ?? null;
 
-            // Build base query with filters
-            $query = stp_free_education::where('data_status', 1)
+            // Build base query with filters - removed data_status filter to show all schemes (active and disabled)
+            $query = stp_free_education::query()
                 ->when($request->filled('search'), function ($query) use ($request) {
                     $query->where('scheme_name', 'like', '%' . $request->search . '%');
                 });
@@ -1758,6 +1759,7 @@ class AdminController extends Controller
                     'description' => $scheme->description,
                     'text_color_code' => $scheme->text_color_code,
                     'background_color_code' => $scheme->background_color_code,
+                    'data_status' => $scheme->data_status,
                     'updated_by' => $scheme->updated_by,
                     'created_by' => $scheme->created_by,
                     'updated_at' => $scheme->updated_at,
@@ -1792,6 +1794,9 @@ class AdminController extends Controller
                 'background_color_code' => 'nullable|string|max:7',
                 'offered_by_schools' => 'nullable|array',
                 'offered_by_schools.*' => 'integer|exists:stp_schools,id',
+                // Optional: associate courses at creation time
+                'course_ids' => 'nullable|array',
+                'course_ids.*' => 'integer|exists:stp_courses,id',
             ]);
 
             // Log all request data for debugging
@@ -1827,6 +1832,22 @@ class AdminController extends Controller
                     ]);
                 }
             }
+
+            // Handle associated courses if provided
+            $requestedCourseIds = $request->input('course_ids', []);
+            if (!empty($requestedCourseIds)) {
+                foreach ($requestedCourseIds as $courseId) {
+                    stp_course_free_education::create([
+                        'course_id' => $courseId,
+                        'free_education_id' => $scheme->id,
+                        'data_status' => 1,
+                        'created_by' => $authUser->id,
+                        'updated_by' => $authUser->id,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
+            }
             
             return response()->json([
                 'success' => true,
@@ -1857,8 +1878,12 @@ class AdminController extends Controller
                 'description' => 'nullable|string|max:1000',
                 'text_color_code' => 'nullable|string|max:7',
                 'background_color_code' => 'nullable|string|max:7',
+                'data_status' => 'nullable|integer|in:0,1',
                 'offered_by_schools' => 'nullable|array',
                 'offered_by_schools.*' => 'integer|exists:stp_schools,id',
+                // Selected courses to associate with this free education scheme
+                'course_ids' => 'nullable|array',
+                'course_ids.*' => 'integer|exists:stp_courses,id',
             ]);
 
             $scheme = stp_free_education::find($request->id);
@@ -1870,13 +1895,20 @@ class AdminController extends Controller
             }
 
             // Update scheme details
-            $scheme->update([
+            $updateData = [
                 'scheme_name' => $request->scheme_name,
                 'description' => $request->description,
                 'text_color_code' => $request->text_color_code,
                 'background_color_code' => $request->background_color_code,
                 'updated_by' => $authUser->id,
-            ]);
+            ];
+            
+            // Only update data_status if it's provided
+            if ($request->has('data_status')) {
+                $updateData['data_status'] = $request->data_status;
+            }
+            
+            $scheme->update($updateData);
 
             // Handle offered schools
             $offeredSchools = $request->input('offered_by_schools', []);
@@ -1906,6 +1938,40 @@ class AdminController extends Controller
                         'data_status' => 0,
                         'updated_by' => $authUser->id,
                         'updated_at' => now()
+                    ]);
+            }
+
+            // Handle associated courses (link courses to this free education scheme)
+            $requestedCourseIds = $request->input('course_ids', []);
+            $existingCourseIds = stp_course_free_education::where('free_education_id', $scheme->id)
+                ->where('data_status', 1)
+                ->pluck('course_id')
+                ->toArray();
+
+            // Add new course associations
+            $courseIdsToAdd = array_diff($requestedCourseIds, $existingCourseIds);
+            foreach ($courseIdsToAdd as $courseId) {
+                stp_course_free_education::create([
+                    'course_id' => $courseId,
+                    'free_education_id' => $scheme->id,
+                    'data_status' => 1,
+                    'created_by' => $authUser->id,
+                    'updated_by' => $authUser->id,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
+            // Deactivate removed course associations
+            $courseIdsToDeactivate = array_diff($existingCourseIds, $requestedCourseIds);
+            if (!empty($courseIdsToDeactivate)) {
+                stp_course_free_education::where('free_education_id', $scheme->id)
+                    ->whereIn('course_id', $courseIdsToDeactivate)
+                    ->where('data_status', 1)
+                    ->update([
+                        'data_status' => 0,
+                        'updated_by' => $authUser->id,
+                        'updated_at' => now(),
                     ]);
             }
 
@@ -1958,6 +2024,12 @@ class AdminController extends Controller
                 })
                 ->toArray();
 
+            // Fetch courses that are currently associated with this free education scheme
+            $selectedCourseIds = stp_course_free_education::where('free_education_id', $scheme->id)
+                ->where('data_status', 1)
+                ->pluck('course_id')
+                ->toArray();
+
             // Log::info('✅ Free education scheme retrieved successfully:', [
             //     'id' => $scheme->id,
             //     'scheme_name' => $scheme->scheme_name,
@@ -1979,11 +2051,13 @@ class AdminController extends Controller
                     'description' => $scheme->description,
                     'text_color_code' => $scheme->text_color_code,
                     'background_color_code' => $scheme->background_color_code,
+                    'data_status' => $scheme->data_status ?? 1,
                     'created_by' => $scheme->created_by,
                     'updated_by' => $scheme->updated_by,
                     'created_at' => $scheme->created_at,
                     'updated_at' => $scheme->updated_at,
-                    'offered_by_schools' => $offeredBySchools
+                    'offered_by_schools' => $offeredBySchools,
+                    'selected_course_ids' => $selectedCourseIds,
                 ]
             ]);
         } catch (ValidationException $e) {
@@ -3333,7 +3407,7 @@ class AdminController extends Controller
                 'school_id' => 'integer|nullable',
                 'data_status' => 'integer|nullable',
                 'offset' => 'integer|nullable|min:0',
-                'sort_column' => 'nullable|string|in:student_name,course_name,institution,contact_number,created_date,form_status',
+                'sort_column' => 'nullable|string|in:student_name,course_name,institution,state,city,contact_number,created_date,form_status',
                 'sort_direction' => 'nullable|string|in:asc,desc'
             ]);
 
@@ -3343,7 +3417,13 @@ class AdminController extends Controller
             $sortDirection = $request->sort_direction;
 
             // Base query with eager loads and filters
-            $query = stp_submited_form::with(['student.detail', 'course.school'])
+            $query = stp_submited_form::with([
+                    'student.detail',
+                    'student.detail.country',
+                    'student.detail.state',
+                    'student.detail.city',
+                    'course.school'
+                ])
                 ->when($request->filled('data_status'), function ($q) use ($request) {
                     $q->where('data_status', $request->data_status);
                 })
@@ -3375,6 +3455,20 @@ class AdminController extends Controller
                     $query->orderBy('created_at', $sortDirection);
                 } elseif ($sortColumn === 'form_status') {
                     $query->orderBy('form_status', $sortDirection);
+                } elseif ($sortColumn === 'state') {
+                    // Join student -> detail -> state to sort by state name
+                    $query->leftJoin('stp_students as s', 'stp_submited_forms.student_id', '=', 's.id')
+                        ->leftJoin('stp_student_details as sd', 'sd.student_id', '=', 's.id')
+                        ->leftJoin('stp_states as st', 'sd.state_id', '=', 'st.id')
+                        ->select('stp_submited_forms.*')
+                        ->orderBy('st.state_name', $sortDirection);
+                } elseif ($sortColumn === 'city') {
+                    // Join student -> detail -> city to sort by city name
+                    $query->leftJoin('stp_students as s', 'stp_submited_forms.student_id', '=', 's.id')
+                        ->leftJoin('stp_student_details as sd', 'sd.student_id', '=', 's.id')
+                        ->leftJoin('stp_cities as ct', 'sd.city_id', '=', 'ct.id')
+                        ->select('stp_submited_forms.*')
+                        ->orderBy('ct.city_name', $sortDirection);
                 } else {
                     // For student_name, course_name, institution, contact_number: keep default order, sort within page
                     $query->orderBy('created_at', 'desc');
@@ -3403,6 +3497,9 @@ class AdminController extends Controller
                     "institution" => $applicant->course->school->school_name ?? 'N/A',
                     "contact_number" => $student?->student_contactNo ?? '',
                     "country_code" => $student?->student_countryCode ?? '',
+                    // Student location
+                    "state" => $studentDetail?->state?->state_name ?? null,
+                    "city" => $studentDetail?->city?->city_name ?? null,
                     "created_date" => $applicant->created_at->format("d/M/y"),
                     "form_status" => match ((int)$applicant->form_status) {
                         0 => "Disable",
@@ -3424,7 +3521,7 @@ class AdminController extends Controller
             });
 
             // Sort inside current page for related text fields
-            if ($sortColumn && in_array($sortColumn, ['student_name', 'course_name', 'institution', 'contact_number'], true) && $sortDirection) {
+            if ($sortColumn && in_array($sortColumn, ['student_name', 'course_name', 'institution', 'state', 'city', 'contact_number'], true) && $sortDirection) {
                 $processedData = $processedData->sort(function ($a, $b) use ($sortColumn, $sortDirection) {
                     $aValue = $a[$sortColumn] ?? '';
                     $bValue = $b[$sortColumn] ?? '';
@@ -3657,6 +3754,7 @@ class AdminController extends Controller
                     'feedback' => $applicant->form_feedback,
                     'applied' => $applicant->created_at,
                     'status' => $applicant->form_status,
+                    'data_status' => $applicant->data_status,
                     'address' => $applicant->student->detail->student_detailAddress ?? '',
                     'ic' => $applicant->student->student_icNumber ?? '',
                     'achievement' => $applicant->student->award->map(function ($achievement) {
@@ -3929,7 +4027,8 @@ class AdminController extends Controller
                 'school_id' => 'required|integer',
                 'feedback' => 'string',
                 'created_at' => 'required|date_format:Y-m-d',
-                'status' => 'integer'
+                'status' => 'integer',
+                'data_status' => 'nullable|integer'
             ]);
 
             // Retrieve the course based on the provided courses_id
@@ -3950,7 +4049,7 @@ class AdminController extends Controller
             $editApplication->timestamps = false;
 
             // Update the applicant form
-            $editApplication->update([
+            $updateData = [
                 'id' => $request->id,
                 'courses_id' => $request->courses_id,
                 'school_id' => $course->school_id, // Use the school_id from the course
@@ -3959,7 +4058,14 @@ class AdminController extends Controller
                 'form_status' => $request->status,
                 'updated_by' => Auth::id(),
                 'updated_at' => now()
-            ]);
+            ];
+            
+            // Only update data_status if it's provided
+            if ($request->has('data_status')) {
+                $updateData['data_status'] = $request->data_status;
+            }
+            
+            $editApplication->update($updateData);
 
             // Re-enable automatic timestamps
             $editApplication->timestamps = true;
@@ -3982,6 +4088,49 @@ class AdminController extends Controller
             ], 500);
         }
     }
+
+    public function updateApplicantFormStatus(Request $request)
+    {
+        try {
+            $request->validate([
+                'id' => 'required|integer',
+                'form_status' => 'required|integer'
+            ]);
+
+            $applicant = stp_submited_form::find($request->id);
+            
+            if (!$applicant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Applicant not found'
+                ], 404);
+            }
+
+            $applicant->update([
+                'form_status' => $request->form_status,
+                'updated_by' => Auth::id(),
+                'updated_at' => now()
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => 'Application status updated successfully']
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation Error',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function addPackage(Request $request)
     {
         try {

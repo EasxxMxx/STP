@@ -764,6 +764,16 @@ class studentController extends Controller
                     } else {
                         $logo = $courses->courses->course_logo;
                     }
+                    
+                    // Get school cover photo
+                    $coverPhoto = null;
+                    foreach ($courses->courses->school->media as $photo) {
+                        if ($photo->schoolMedia_type == 66) {
+                            $coverPhoto = $photo->schoolMedia_location;
+                            break;
+                        }
+                    }
+                    
                     return [
                         "id" => $courses->courses->id,
                         "school_id" => $courses->courses->school->id,
@@ -773,6 +783,7 @@ class studentController extends Controller
                         "course_qualification_color" => $courses->courses->qualification->qualification_color_code,
                         'course_school' => $courses->courses->school->school_name,
                         'location' => $courses->courses->school->city->city_name ?? null,
+                        'school_cover' => $coverPhoto,
                     ];
                 })
                 ->unique('id')
@@ -1020,32 +1031,34 @@ class studentController extends Controller
                     }
                 }
 
-                // Get school free education schemes
+                // Get school free education schemes (include all, frontend will filter by data_status)
                 $schoolFreeEducationSchemes = stp_school_free_education::where('school_id', $course->school->id)
                     ->where('stp_school_free_education.data_status', 1)
                     ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
-                    ->select('stp_free_education.id', 'stp_free_education.scheme_name', 'stp_free_education.text_color_code', 'stp_free_education.background_color_code')
+                    ->select('stp_free_education.id', 'stp_free_education.scheme_name', 'stp_free_education.text_color_code', 'stp_free_education.background_color_code', 'stp_free_education.data_status')
                     ->get()
                     ->map(function($scheme) {
                         return [
                             'id' => $scheme->id,
                             'scheme_name' => $scheme->scheme_name,
                             'text_color_code' => $scheme->text_color_code,
-                            'background_color_code' => $scheme->background_color_code
+                            'background_color_code' => $scheme->background_color_code,
+                            'data_status' => $scheme->data_status
                         ];
                     })
                     ->toArray();
 
-                // Get course free education schemes
+                // Get course free education schemes (include all, frontend will filter by data_status)
                 $courseFreeEducationSchemes = stp_course_free_education::where('course_id', $course->id)
                     ->where('stp_course_free_education.data_status', 1)
                     ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
-                    ->select('stp_free_education.id', 'stp_free_education.scheme_name')
+                    ->select('stp_free_education.id', 'stp_free_education.scheme_name', 'stp_free_education.data_status')
                     ->get()
                     ->map(function($scheme) {
                         return [
                             'id' => $scheme->id,
-                            'scheme_name' => $scheme->scheme_name
+                            'scheme_name' => $scheme->scheme_name,
+                            'data_status' => $scheme->data_status
                         ];
                     })
                     ->toArray();
@@ -1086,8 +1099,19 @@ class studentController extends Controller
             // Reset the collection in the paginator
             $paginator->setCollection(collect($transformedCourses));
 
+            // Check if free education id=1 has data_status=1
+            $freeEducationId1Status = \DB::table('stp_free_education')
+                ->where('id', 1)
+                ->value('data_status');
+            
+            $isFreeEducationId1Active = ($freeEducationId1Status == 1);
+
+            // Add custom metadata to paginator
+            $paginatorData = $paginator->toArray();
+            $paginatorData['free_education_id1_active'] = $isFreeEducationId1Active;
+
             // Return the paginated response in the desired format
-            return response()->json($paginator);
+            return response()->json($paginatorData);
 
             // return $transformedCourses;
 

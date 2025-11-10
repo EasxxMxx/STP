@@ -233,6 +233,7 @@ Route::prefix('admin')->middleware('auth:sanctum')->group(function () {
     Route::post('/applicantDetailInfo', [AdminController::class, 'applicantDetailInfo'])->withoutMiddleware('auth:sanctum');
     Route::post('/editApplicantStatus', [AdminController::class, 'editApplicantStatus']);
     Route::post('/editApplicantForm', [AdminController::class, 'editApplicantForm']);
+    Route::post('/updateApplicantFormStatus', [AdminController::class, 'updateApplicantFormStatus']);
     Route::post('/applicantDetail', [AdminController::class, 'applicantDetail']);
 
     Route::post('/addPackage', [AdminController::class, 'addPackage']);

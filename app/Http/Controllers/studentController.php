@@ -1039,11 +1039,11 @@ class studentController extends Controller
                     ->get()
                     ->map(function($scheme) {
                         return [
-                            'id' => $scheme->id,
+                            'id' => (int) $scheme->id, // Ensure ID is integer for consistent comparison
                             'scheme_name' => $scheme->scheme_name,
                             'text_color_code' => $scheme->text_color_code,
                             'background_color_code' => $scheme->background_color_code,
-                            'data_status' => $scheme->data_status
+                            'data_status' => (int) $scheme->data_status // Ensure data_status is integer
                         ];
                     })
                     ->toArray();
@@ -1056,9 +1056,9 @@ class studentController extends Controller
                     ->get()
                     ->map(function($scheme) {
                         return [
-                            'id' => $scheme->id,
+                            'id' => (int) $scheme->id, // Ensure ID is integer for consistent comparison
                             'scheme_name' => $scheme->scheme_name,
-                            'data_status' => $scheme->data_status
+                            'data_status' => (int) $scheme->data_status // Ensure data_status is integer
                         ];
                     })
                     ->toArray();

@@ -1539,7 +1539,7 @@ class AdminController extends Controller
                 ->get()
                 ->map(function ($course) {
                     return [
-                        'id' => $course->id,
+                        'id' => (int) $course->id, // Ensure ID is integer for consistent comparison
                         'name' => $course->course_name,
                     ];
                 });
@@ -2028,6 +2028,9 @@ class AdminController extends Controller
             $selectedCourseIds = stp_course_free_education::where('free_education_id', $scheme->id)
                 ->where('data_status', 1)
                 ->pluck('course_id')
+                ->map(function($id) {
+                    return (int) $id; // Ensure all IDs are integers
+                })
                 ->toArray();
 
             // Log::info('✅ Free education scheme retrieved successfully:', [

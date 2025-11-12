@@ -3611,7 +3611,7 @@ class AdminController extends Controller
                 ];
             })->values();
             $filteredStudentCgpaOLevel = $applicant->student->cgpa->filter(function ($cgpaOlevel) {
-                return $cgpaOlevel->transcript_category == 36; // Filter for category 37
+                return $cgpaOlevel->transcript_category == 35; // Filter for category 35 (O-Level)
             })->map(function ($cgpaOlevel) {
                 return [
                     'id' => $cgpaOlevel->id,
@@ -3737,93 +3737,225 @@ class AdminController extends Controller
                     'category' => $diploma->category->id
                 ];
             })->values();
-            // Group higherTranscript by category_id
+            
+            // Dynamically group all higher transcripts by category (excluding legacy categories 33-37)
+            // Legacy categories (Foundation, STPM, A-Level, O-Level, Diploma) are handled separately
+            $legacyCategoryIds = [33, 34, 35, 36, 37]; // STPM, A-Level, O-Level, Diploma, Foundation
+            
+            $groupedHigherTranscripts = $applicant->student->higherTranscript
+                ->where('highTranscript_status', 1)
+                ->filter(function ($item) use ($legacyCategoryIds) {
+                    // Exclude legacy categories - they're handled separately
+                    return !in_array($item->category->id, $legacyCategoryIds);
+                })
+                ->groupBy(function ($item) {
+                    return $item->category->id;
+                })
+                ->map(function ($items, $categoryId) {
+                    $category = $items->first()->category;
+                    $categoryName = $category->core_metaName;
+                    // Convert category name to key format (lowercase, replace spaces/hyphens with underscores)
+                    $categoryKey = strtolower(preg_replace('/[^a-z0-9]+/i', '_', $categoryName));
+                    $categoryKey = trim($categoryKey, '_');
+                    
+                    return [
+                        'category_id' => $categoryId,
+                        'category_name' => $categoryKey,
+                        'category_display' => $categoryName,
+                        'subjects' => $items->map(function ($item) {
+                            return [
+                                'id' => $item->id,
+                                'highTranscript' => $item->category->core_metaName,
+                                'highTranscript_name' => $item->highTranscript_name,
+                                'higherTranscript_grade' => $item->higherTranscript_grade,
+                                'category' => $item->category->id
+                            ];
+                        })->values()
+                    ];
+                });
+            
+            // Also get categories that have media but no transcript records (e.g., UEC/Other with only documents)
+            // Exclude legacy categories (33-37) and SPM categories (32, 85) - they're handled separately
+            $excludedMediaTypes = [32, 33, 34, 35, 36, 37, 85]; // SPM, STPM, A-Level, O-Level, Diploma, Foundation, SPM Trial
+            
+            $mediaCategories = $applicant->student->studentMedia
+                ->where('studentMedia_status', 1)
+                ->whereNotIn('studentMedia_type', $excludedMediaTypes)
+                ->groupBy('studentMedia_type')
+                ->map(function ($mediaItems, $categoryId) {
+                    // Get category info from core_meta
+                    $category = stp_core_meta::find($categoryId);
+                    if (!$category || $category->core_metaType !== 'transcript_category') {
+                        return null;
+                    }
+                    
+                    $categoryName = $category->core_metaName;
+                    $categoryKey = strtolower(preg_replace('/[^a-z0-9]+/i', '_', $categoryName));
+                    $categoryKey = trim($categoryKey, '_');
+                    
+                    return [
+                        'category_id' => $categoryId,
+                        'category_name' => $categoryKey,
+                        'category_display' => $categoryName,
+                        'subjects' => collect([]) // Empty subjects array
+                    ];
+                })
+                ->filter(function ($item) {
+                    return $item !== null;
+                });
+            
+            // Merge media-only categories with transcript categories
+            foreach ($mediaCategories as $categoryId => $mediaCategory) {
+                if (!isset($groupedHigherTranscripts[$categoryId])) {
+                    $groupedHigherTranscripts[$categoryId] = $mediaCategory;
+                }
+            }
+            
+            // Build dynamic response with all categories
+            $responseData = [
+                'id' => $applicant->id,
+                "course_name" => $applicant->course->course_name ?? 'N/A',
+                "courseID" => $applicant->course->id,
+                'email' => $applicant->student->student_email ?? 'N/A',
+                "institution" => $applicant->course->school->school_name,
+                "schoolID" => $applicant->course->school_id,
+                'name' => $applicant->student && $applicant->student->detail
+                    ? $applicant->student->detail->student_detailFirstName . ' ' . $applicant->student->detail->student_detailLastName
+                    : 'N/A',
+                "country_code" => $applicant->student->student_countryCode ?? 'N/A',
+                "contact_number" => $applicant->student->student_contactNo ?? 'N/A',
+                'qualification' => $applicant->course->qualification->qualification_name ?? "",
+                'student_id' => $applicant->student->id ?? 'N/A',
+                'feedback' => $applicant->form_feedback,
+                'applied' => $applicant->created_at,
+                'status' => $applicant->form_status,
+                'data_status' => $applicant->data_status,
+                'address' => $applicant->student->detail->student_detailAddress ?? '',
+                'ic' => $applicant->student->student_icNumber ?? '',
+                'achievement' => $applicant->student->award->map(function ($achievement) {
+                    return [
+                        'achievement_name' => $achievement->achievement_name,
+                        'title_obtained' => $achievement->title->core_metaName,
+                        'achievement_media' => $achievement->achievement_media,
+                        'awarded_by' => $achievement->awarded_by,
+                    ];
+                }),
+                'cocurriculum' => $applicant->student->cocurriculum->map(function ($cocurriculum) {
+                    return [
+                        'club_name' => $cocurriculum->club_name,
+                        'student_position' => $cocurriculum->student_position,
+                        'location' => $cocurriculum->location,
+                        'year' => $cocurriculum->year,
+                    ];
+                }),
+                'others' => $applicant->student->otherCertificate->map(function ($otherCertificate) {
+                    return [
+                        'certificate_name' => $otherCertificate->certificate_name,
+                        'certificate_media' => $otherCertificate->certificate_media,
+                    ];
+                }),
+                'cgpaFoundation' => $filteredStudentCgpaFoundation ?? '',
+                'cgpaDiploma' => $filteredStudentCgpaDiploma ?? '',
+                'cgpaOlevel' => $filteredStudentCgpaOLevel ?? '',
+                'cgpaAlevel' => $filteredStudentCgpaALevel ?? '',
+                'cgpaStpm' => $filteredStudentCgpaStpm ?? '',
+                'media_spm' => $filteredStudentMediaSpm ?? '',
+                'media_spm_trial' => $filteredStudentMediaSpmTrial ?? '',
+                'media_stpm' => $filteredStudentMediaStpm ?? '',
+                'media_alevel' => $filteredStudentMediaALevel ?? '',
+                'media_olevel' => $filteredStudentMediaOLevel ?? '',
+                'media_diploma' =>  $filteredStudentMediaDiploma ?? '',
+                'media_foundation' => $filteredStudentMediaFoundation ?? '',
+                'spm' => $applicant->student->transcript->filter(function ($transcript) {
+                    return $transcript->category->id == 32; // Filter for category 32
+                })->map(function ($transcript) {
+                    return [
+                        'id' => $transcript->id,
+                        'category' => $transcript->category->id,
+                        'subject_id' => $transcript->subject_id,
+                        'subject_name' => $transcript->subject->subject_name,
+                        'transcript_grade' => $transcript->grade->core_metaName ?? '',
+                    ];
+                }),
+                'spm_trial' => $applicant->student->transcript->filter(function ($transcriptTrial) {
+                    return $transcriptTrial->category->id == 85; // Filter for category 85
+                })->map(function ($transcriptTrial) {
+                    return [
+                        'id' => $transcriptTrial->id,
+                        'category' => $transcriptTrial->category->id,
+                        'subject_id' => $transcriptTrial->subject_id,
+                        'subject_name' => $transcriptTrial->subject->subject_name,
+                        'transcript_grade' => $transcriptTrial->grade->core_metaName ?? '',
+                    ];
+                })->values(),
+                // Keep legacy keys for backward compatibility
+                // Use empty array if no data, so frontend can check for media/CGPA
+                'foundation' => $filteredFoundation && $filteredFoundation->count() > 0 ? $filteredFoundation : [],
+                'stpm' => $filteredStpm && $filteredStpm->count() > 0 ? $filteredStpm : [],
+                'alevel' => $filteredALevel && $filteredALevel->count() > 0 ? $filteredALevel : [],
+                'olevel' => $filteredOLevel && $filteredOLevel->count() > 0 ? $filteredOLevel : [],
+                'diploma' => $filteredDiploma && $filteredDiploma->count() > 0 ? $filteredDiploma : [],
+            ];
+            
+            // For legacy categories, ensure they show up if they have media even without subjects
+            $legacyCategoryMap = [
+                33 => 'stpm',
+                34 => 'alevel',
+                35 => 'olevel',
+                36 => 'diploma',
+                37 => 'foundation'
+            ];
+            
+            foreach ($legacyCategoryMap as $categoryId => $key) {
+                // Check if category has media but no subjects
+                $hasMedia = isset($responseData['media_' . $key]) && is_array($responseData['media_' . $key]) && count($responseData['media_' . $key]) > 0;
+                $hasSubjects = isset($responseData[$key]) && is_array($responseData[$key]) && count($responseData[$key]) > 0;
+                
+                // If has media but no subjects, ensure empty array is set (not null/empty string)
+                if ($hasMedia && !$hasSubjects) {
+                    $responseData[$key] = [];
+                }
+            }
+            
+            // Add dynamically grouped higher transcripts (for UEC, Other, etc.)
+            foreach ($groupedHigherTranscripts as $group) {
+                $key = $group['category_name'];
+                // Only add if not already in legacy keys
+                if (!in_array($key, ['foundation', 'stpm', 'alevel', 'olevel', 'diploma'])) {
+                    $responseData[$key] = $group['subjects'];
+                    
+                    // Also add media for this category
+                    $categoryMedia = $applicant->student->studentMedia
+                        ->where('studentMedia_type', $group['category_id'])
+                        ->where('studentMedia_status', 1)
+                        ->map(function ($media) {
+                            return [
+                                'id' => $media->id,
+                                'studentMedia_location' => $media->studentMedia_location,
+                                'studentMedia_type' => $media->studentMedia_type,
+                            ];
+                        })->values();
+                    $responseData['media_' . $key] = $categoryMedia;
+                    
+                    // Also add CGPA for this category
+                    $categoryCgpa = $applicant->student->cgpa
+                        ->where('transcript_category', $group['category_id'])
+                        ->map(function ($cgpa) {
+                            return [
+                                'id' => $cgpa->id,
+                                'category' => $cgpa->transcript_category,
+                                'cgpa' => $cgpa->cgpa
+                            ];
+                        })->values();
+                    // Generate CGPA key: capitalize first letter (e.g., "uec" -> "cgpaUec", "other" -> "cgpaOther")
+                    $cgpaKey = 'cgpa' . ucfirst($key);
+                    $responseData[$cgpaKey] = $categoryCgpa;
+                }
+            }
+            
             return response()->json([
                 'success' => true,
-                'data' => [
-                    'id' => $applicant->id,
-                    "course_name" => $applicant->course->course_name ?? 'N/A',
-                    "courseID" => $applicant->course->id,
-                    'email' => $applicant->student->student_email ?? 'N/A',
-                    "institution" => $applicant->course->school->school_name,
-                    "schoolID" => $applicant->course->school_id,
-                    'name' => $applicant->student && $applicant->student->detail
-                        ? $applicant->student->detail->student_detailFirstName . ' ' . $applicant->student->detail->student_detailLastName
-                        : 'N/A',
-                    "country_code" => $applicant->student->student_countryCode ?? 'N/A',
-                    "contact_number" => $applicant->student->student_contactNo ?? 'N/A',
-                    'qualification' => $applicant->course->qualification->qualification_name ?? "",
-                    'student_id' => $applicant->student->id ?? 'N/A',
-                    'feedback' => $applicant->form_feedback,
-                    'applied' => $applicant->created_at,
-                    'status' => $applicant->form_status,
-                    'data_status' => $applicant->data_status,
-                    'address' => $applicant->student->detail->student_detailAddress ?? '',
-                    'ic' => $applicant->student->student_icNumber ?? '',
-                    'achievement' => $applicant->student->award->map(function ($achievement) {
-                        return [
-                            'achievement_name' => $achievement->achievement_name,
-                            'title_obtained' => $achievement->title->core_metaName,
-                            'achievement_media' => $achievement->achievement_media,
-                            'awarded_by' => $achievement->awarded_by,
-                        ];
-                    }),
-                    'cocurriculum' => $applicant->student->cocurriculum->map(function ($cocurriculum) {
-                        return [
-                            'club_name' => $cocurriculum->club_name,
-                            'student_position' => $cocurriculum->student_position,
-                            'location' => $cocurriculum->location,
-                            'year' => $cocurriculum->year,
-                        ];
-                    }),
-                    'others' => $applicant->student->otherCertificate->map(function ($otherCertificate) {
-                        return [
-                            'certificate_name' => $otherCertificate->certificate_name,
-                            'certificate_media' => $otherCertificate->certificate_media,
-                        ];
-                    }),
-                    'cgpaFoundation' => $filteredStudentCgpaFoundation ?? '',
-                    'cgpaDiploma' => $filteredStudentCgpaDiploma ?? '',
-                    'cgpaOlevel' => $filteredStudentCgpaOLevel ?? '',
-                    'cgpaAlevel' => $filteredStudentCgpaALevel ?? '',
-                    'cgpaStpm' => $filteredStudentCgpaStpm ?? '',
-                    'media_spm' => $filteredStudentMediaSpm ?? '',
-                    'media_spm_trial' => $filteredStudentMediaSpmTrial ?? '',
-                    'media_stpm' => $filteredStudentMediaStpm ?? '',
-                    'media_alevel' => $filteredStudentMediaALevel ?? '',
-                    'media_olevel' => $filteredStudentMediaOLevel ?? '',
-                    'media_diploma' =>  $filteredStudentMediaDiploma ?? '',
-                    'media_foundation' => $filteredStudentMediaFoundation ?? '',
-                    'spm' => $applicant->student->transcript->filter(function ($transcript) {
-                        return $transcript->category->id == 32; // Filter for category 32
-                    })->map(function ($transcript) {
-                        return [
-                            'id' => $transcript->id,
-                            'category' => $transcript->category->id,
-                            'subject_id' => $transcript->subject_id,
-                            'subject_name' => $transcript->subject->subject_name,
-                            'transcript_grade' => $transcript->grade->core_metaName ?? '',
-                        ];
-                    }),
-                    'spm_trial' => $applicant->student->transcript->filter(function ($transcriptTrial) {
-                        return $transcriptTrial->category->id == 85; // Filter for category 85
-                    })->map(function ($transcriptTrial) {
-                        return [
-                            'id' => $transcriptTrial->id,
-                            'category' => $transcriptTrial->category->id,
-                            'subject_id' => $transcriptTrial->subject_id,
-                            'subject_name' => $transcriptTrial->subject->subject_name,
-                            'transcript_grade' => $transcriptTrial->grade->core_metaName ?? '',
-                        ];
-                    })->values(), // Add this line to reset the keys
-                    'foundation' => $filteredFoundation ?? '', // Updated to return grouped higherTranscript
-                    'stpm' => $filteredStpm ?? '',
-                    'alevel' => $filteredALevel ?? '',
-                    'olevel' => $filteredOLevel ?? '',
-                    'diploma' => $filteredDiploma ?? '',
-
-                ]
-
+                'data' => $responseData
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -5571,7 +5703,7 @@ class AdminController extends Controller
         try {
             $categoryList = stp_core_meta::query()
                 ->where('core_metaStatus', 1)
-                ->whereIn('id', [32, 33, 34, 35, 36, 37])
+                ->where('core_metaType', 'transcript_category')
                 ->paginate(20)
                 ->through(function ($category) {
                     $status = ($category->status == 1) ? "Active" : "Inactive";

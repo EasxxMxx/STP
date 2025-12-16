@@ -513,6 +513,7 @@ class studentController extends Controller
                 'intake' => $intakeList, // Updated to include all intakes
                 'courseFeatured' => $featuredList,
                 'category' => $courseList->category->category_name,
+                'category_id' => $courseList->category_id,
                 'school' => $courseList->school->school_name,
                 'schoolShortDescription' => $courseList->school->school_shortDesc,
                 'schoolLongDescription' => $courseList->school->school_fullDesc,
@@ -663,6 +664,9 @@ class studentController extends Controller
                 'id' => $school->id,
                 'name' => $school->school_name,
                 'school_email' => $school->school_email,
+                'school_contactNo' => $school->school_contactNo ?? null,
+                'school_countryCode' => $school->school_countryCode ?? null,
+                'person_inChargeEmail' => $school->person_inChargeEmail ?? null,
                 'category' => $school->institueCategory->core_metaName ?? null,
                 'logo' => $school->school_logo,
                 'country' => $school->country->country_name ?? null,
@@ -675,6 +679,7 @@ class studentController extends Controller
                 'school_lat' => $school->school_lat,
                 'number_courses' => count($school->courses),
                 'google_map_location' => $school->school_google_map_location,
+                'school_website' => $school->school_officalWebsite ?? null,
                 'courses' => $coursesList,
                 'month' => $intakeMonth,
                 'school_cover' => $schoolCover,
@@ -837,7 +842,9 @@ class studentController extends Controller
                 'studyMode' => 'array',
                 'tuitionFee' => 'numeric',
                 'intake' => 'array',
-                'freeForSarawakian' => 'nullable|boolean'
+                'freeForSarawakian' => 'nullable|boolean',
+                'per_page' => 'nullable|integer|min:1|max:100',
+                'offset' => 'nullable|integer|min:0'
             ]);
 
             $filterConditions = function ($query) use ($request) {
@@ -920,35 +927,75 @@ class studentController extends Controller
             };
 
 
-            $perPage = 40;
+            // Support both pagination (page-based) and infinite scroll (offset-based)
+            $useOffset = $request->has('offset');
+            $perPage = $request->get('per_page', 40);
             $featuredLimit = 5;
 
-            // Randomly select featured courses
-            $featuredCourses = stp_course::query()
-                ->select('stp_courses.*')
-                ->join('stp_featureds', function ($join) {
-                    $join->on('stp_courses.id', '=', 'stp_featureds.course_id')
-                        ->whereNotNull('stp_featureds.course_id')
-                        ->where('stp_featureds.featured_startTime', '<', now())
-                        ->where('stp_featureds.featured_endTime', '>', now())
-                        ->where('stp_featureds.featured_type', 30)
-                        ->where('stp_featureds.featured_status', 1);
-                })
-                ->where($filterConditions)
-                ->whereHas('school', function ($q) {
-                    $q->whereIn('school_status', ["1", "3"]);
-                })
-                ->inRandomOrder() // Randomize each time
-                ->take($featuredLimit)
-                ->get()
-                ->unique('id');
+            // Only load featured courses on first page/initial load (offset = 0 or page = 1)
+            $loadFeatured = false;
+            if ($useOffset) {
+                $offset = $request->get('offset', 0);
+                $loadFeatured = ($offset === 0);
+            } else {
+                $page = $request->get('page', 1);
+                $offset = ($page - 1) * $perPage;
+                $loadFeatured = ($page === 1);
+            }
 
-            // Calculate offset and limit for the page
-            $page = $request->get('page', 1);
-            $offset = ($page - 1) * $perPage;
+            // Randomly select featured courses (only on first load)
+            $featuredCourses = collect([]);
+            if ($loadFeatured) {
+                $featuredCourses = stp_course::query()
+                    ->select('stp_courses.*')
+                    ->join('stp_featureds', function ($join) {
+                        $join->on('stp_courses.id', '=', 'stp_featureds.course_id')
+                            ->whereNotNull('stp_featureds.course_id')
+                            ->where('stp_featureds.featured_startTime', '<', now())
+                            ->where('stp_featureds.featured_endTime', '>', now())
+                            ->where('stp_featureds.featured_type', 30)
+                            ->where('stp_featureds.featured_status', 1);
+                    })
+                    ->where($filterConditions)
+                    ->whereHas('school', function ($q) {
+                        $q->whereIn('school_status', ["1", "3"]);
+                    })
+                    ->inRandomOrder() // Randomize each time
+                    ->take($featuredLimit)
+                    ->get()
+                    ->unique('id');
+            }
 
             // Calculate limit for non-featured courses to fill remaining slots
             $nonFeaturedLimit = $perPage - $featuredCourses->count();
+            
+            // Adjust offset for non-featured courses
+            // If this is the first load (offset = 0), we've loaded 0 non-featured so far
+            if ($offset === 0) {
+                $nonFeaturedOffset = 0;
+            } else {
+                // For subsequent loads, we need to account for featured courses from first load
+                // Get the count of featured courses that would have been loaded on first page
+                $firstLoadFeaturedCount = stp_course::query()
+                    ->select('stp_courses.*')
+                    ->join('stp_featureds', function ($join) {
+                        $join->on('stp_courses.id', '=', 'stp_featureds.course_id')
+                            ->whereNotNull('stp_featureds.course_id')
+                            ->where('stp_featureds.featured_startTime', '<', now())
+                            ->where('stp_featureds.featured_endTime', '>', now())
+                            ->where('stp_featureds.featured_type', 30)
+                            ->where('stp_featureds.featured_status', 1);
+                    })
+                    ->where($filterConditions)
+                    ->whereHas('school', function ($q) {
+                        $q->whereIn('school_status', ["1", "3"]);
+                    })
+                    ->count();
+                // Cap at featuredLimit (5)
+                $firstLoadFeaturedCount = min($firstLoadFeaturedCount, $featuredLimit);
+                // Offset represents total items loaded, subtract featured to get non-featured offset
+                $nonFeaturedOffset = max(0, $offset - $firstLoadFeaturedCount);
+            }
 
             // Query non-featured courses
             // $nonFeaturedCourses = stp_course::query()
@@ -977,7 +1024,7 @@ class studentController extends Controller
                     $q->whereIn('school_status', ["1", "3"]);
                 })
                 ->inRandomOrder()
-                ->skip($offset)
+                ->skip($nonFeaturedOffset)
                 ->take($nonFeaturedLimit)
                 ->get();
 
@@ -1001,17 +1048,8 @@ class studentController extends Controller
                 })
                 ->count();
 
-            // Paginate the combined result
-            $paginator = new \Illuminate\Pagination\LengthAwarePaginator(
-                $courses,
-                $totalFeatured + $totalNonFeatured,
-                $perPage,
-                $page,
-                ['path' => $request->url()]
-            );
-
-            // Transform the courses as per requirements
-            $transformedCourses = $paginator->through(function ($course) {
+            // Transform the courses as per requirements (helper function)
+            $transformCourse = function ($course) {
                 $featured = $course->featured->contains(function ($item) {
                     return $item->featured_type == 30 && $item->featured_status == 1 && $item->featured_startTime < now() && $item->featured_endTime > now();
                 });
@@ -1020,10 +1058,7 @@ class studentController extends Controller
                     ->pluck('month.core_metaName')
                     ->toArray();
 
-
-
-                $coverPhoto = null;  // Initialize it to null
-
+                $coverPhoto = null;
                 foreach ($course->school->media as $photo) {
                     if ($photo->schoolMedia_type == 66) {
                         $coverPhoto = $photo->schoolMedia_location;
@@ -1031,7 +1066,7 @@ class studentController extends Controller
                     }
                 }
 
-                // Get school free education schemes (include all, frontend will filter by data_status)
+                // Get school free education schemes
                 $schoolFreeEducationSchemes = stp_school_free_education::where('school_id', $course->school->id)
                     ->where('stp_school_free_education.data_status', 1)
                     ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
@@ -1039,16 +1074,16 @@ class studentController extends Controller
                     ->get()
                     ->map(function($scheme) {
                         return [
-                            'id' => (int) $scheme->id, // Ensure ID is integer for consistent comparison
+                            'id' => (int) $scheme->id,
                             'scheme_name' => $scheme->scheme_name,
                             'text_color_code' => $scheme->text_color_code,
                             'background_color_code' => $scheme->background_color_code,
-                            'data_status' => (int) $scheme->data_status // Ensure data_status is integer
+                            'data_status' => (int) $scheme->data_status
                         ];
                     })
                     ->toArray();
 
-                // Get course free education schemes (include all, frontend will filter by data_status)
+                // Get course free education schemes
                 $courseFreeEducationSchemes = stp_course_free_education::where('course_id', $course->id)
                     ->where('stp_course_free_education.data_status', 1)
                     ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
@@ -1056,9 +1091,9 @@ class studentController extends Controller
                     ->get()
                     ->map(function($scheme) {
                         return [
-                            'id' => (int) $scheme->id, // Ensure ID is integer for consistent comparison
+                            'id' => (int) $scheme->id,
                             'scheme_name' => $scheme->scheme_name,
-                            'data_status' => (int) $scheme->data_status // Ensure data_status is integer
+                            'data_status' => (int) $scheme->data_status
                         ];
                     })
                     ->toArray();
@@ -1088,23 +1123,40 @@ class studentController extends Controller
                     'institute_category' => $course->school->institueCategory->core_metaName ?? null,
                     'school_location' => $course->school->school_google_map_location,
                     'course_status' => $course->course_status,
-                    // 'is_free_course' => $course->is_free_course,
                     'school_free_education_schemes' => $schoolFreeEducationSchemes,
                     'course_free_education_schemes' => $courseFreeEducationSchemes
                 ];
-            })->values(); // Apply values() to reindex the data
+            };
 
-
-
-            // Reset the collection in the paginator
-            $paginator->setCollection(collect($transformedCourses));
+            // Transform courses
+            $transformedCourses = $courses->map($transformCourse)->values();
 
             // Check if free education id=1 has data_status=1
             $freeEducationId1Status = \DB::table('stp_free_education')
                 ->where('id', 1)
                 ->value('data_status');
-            
             $isFreeEducationId1Active = ($freeEducationId1Status == 1);
+
+            // For offset-based requests (infinite scroll), return simple response
+            if ($useOffset) {
+                $hasMore = ($offset + $courses->count()) < ($totalFeatured + $totalNonFeatured);
+                return response()->json([
+                    'data' => $transformedCourses,
+                    'total' => $totalFeatured + $totalNonFeatured,
+                    'has_more' => $hasMore,
+                    'loaded_count' => $offset + $courses->count(),
+                    'free_education_id1_active' => $isFreeEducationId1Active
+                ]);
+            }
+
+            // Paginate the combined result (for page-based requests)
+            $paginator = new \Illuminate\Pagination\LengthAwarePaginator(
+                $transformedCourses,
+                $totalFeatured + $totalNonFeatured,
+                $perPage,
+                $page,
+                ['path' => $request->url()]
+            );
 
             // Add custom metadata to paginator
             $paginatorData = $paginator->toArray();
@@ -3118,18 +3170,31 @@ class studentController extends Controller
                 ->inRandomOrder()
                 ->get()
                 ->map(function ($featured) {
+                    $course = $featured->courses;
+                    $intakeMonths = $course->intake->pluck('month.core_metaName')->toArray();
+                    
                     return [
-                        'course_id' => $featured->courses->id,
-                        'course_name' => $featured->courses->course_name,
-                        'course_logo' => $featured->courses->course_logo ?? $featured->courses->school->school_logo,
-                        'course_qualification' => $featured->courses->qualification->qualification_name,
-                        'course_qualification_color' => $featured->courses->qualification->qualification_color_code,
-                        'school_id' => $featured->courses->school->id,
-                        'school_category' => $featured->courses->school->institueCategory->core_metaName,
-                        'school_email' => $featured->courses->school->school_email,
-                        'course_school' => $featured->courses->school->school_name,
-                        'state' => $featured->courses->school->state->state_name ?? null,
-                        'country' => $featured->courses->school->country->country_name ?? null,
+                        'id' => $course->id,
+                        'course_id' => $course->id,
+                        'course_name' => $course->course_name,
+                        'course_logo' => $course->course_logo ?? $course->school->school_logo,
+                        'course_qualification' => $course->qualification->qualification_name,
+                        'course_qualification_color' => $course->qualification->qualification_color_code,
+                        'school_id' => $course->school->id,
+                        'school_category' => $course->school->institueCategory->core_metaName,
+                        'school_email' => $course->school->school_email,
+                        'course_school' => $course->school->school_name,
+                        'state' => $course->school->state->state_name ?? null,
+                        'country' => $course->school->country->country_name ?? null,
+                        'country_code' => $course->school->country->country_code ?? null,
+                        'mode' => $course->studyMode->core_metaName ?? null,
+                        'period' => $course->course_period ?? null,
+                        'category_name' => $course->category->category_name ?? null,
+                        'intake' => $intakeMonths,
+                        'cost' => number_format($course->course_cost),
+                        'international_cost' => number_format($course->international_cost),
+                        'affiliating_university' => $course->school->school_name,
+                        'featured' => true, // All courses from featuredCourseList are featured
                     ];
                 })
                 ->unique('course_id');
@@ -3137,6 +3202,138 @@ class studentController extends Controller
             return response()->json([
                 'success' => true,
                 'data' => $featuredCoursesList
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => "Internal Server Error",
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function otherCoursesFromUniversity(Request $request)
+    {
+        try {
+            $request->validate([
+                'schoolId' => 'required|integer',
+                'courseId' => 'required|integer',
+                'limit' => 'nullable|integer|min:1|max:100'
+            ]);
+
+            $limit = $request->get('limit', 4); // Default to 4 courses
+
+            $otherCourses = stp_course::where('school_id', $request->schoolId)
+                ->where('id', '!=', $request->courseId)
+                ->where('course_status', 1)
+                ->whereHas('school', function ($query) {
+                    $query->whereIn('school_status', [1, 3]);
+                })
+                ->inRandomOrder()
+                ->limit($limit)
+                ->get()
+                ->map(function ($course) {
+                    $intakeMonths = $course->intake->where('intake_status', 1)->pluck('month.core_metaName')->toArray();
+                    
+                    // Check if course is featured (featured_type 30 for course listing page)
+                    $featured = $course->featured->contains(function ($item) {
+                        return $item->featured_type == 30 && $item->featured_status == 1 && $item->featured_startTime < now() && $item->featured_endTime > now();
+                    });
+                    
+                    return [
+                        'id' => $course->id,
+                        'course_id' => $course->id,
+                        'course_name' => $course->course_name,
+                        'course_logo' => $course->course_logo ?? $course->school->school_logo,
+                        'course_qualification' => $course->qualification->qualification_name,
+                        'course_qualification_color' => $course->qualification->qualification_color_code,
+                        'school_id' => $course->school->id,
+                        'school_category' => $course->school->institueCategory->core_metaName,
+                        'school_email' => $course->school->school_email,
+                        'course_school' => $course->school->school_name,
+                        'state' => $course->school->state->state_name ?? null,
+                        'country' => $course->school->country->country_name ?? null,
+                        'country_code' => $course->school->country->country_code ?? null,
+                        'mode' => $course->studyMode->core_metaName ?? null,
+                        'period' => $course->course_period ?? null,
+                        'category_name' => $course->category->category_name ?? null,
+                        'intake' => $intakeMonths,
+                        'cost' => number_format($course->course_cost),
+                        'international_cost' => number_format($course->international_cost),
+                        'affiliating_university' => $course->school->school_name,
+                        'featured' => $featured,
+                    ];
+                });
+
+            return response()->json([
+                'success' => true,
+                'data' => $otherCourses
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => "Internal Server Error",
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function coursesMightInterested(Request $request)
+    {
+        try {
+            $request->validate([
+                'categoryId' => 'required|integer',
+                'courseId' => 'required|integer',
+                'limit' => 'nullable|integer|min:1|max:10'
+            ]);
+
+            $limit = $request->get('limit', 10); // Default to 10 courses, max 10
+
+            $coursesMightInterested = stp_course::where('category_id', $request->categoryId)
+                ->where('id', '!=', $request->courseId)
+                ->where('course_status', 1)
+                ->whereHas('school', function ($query) {
+                    $query->whereIn('school_status', [1, 3]);
+                })
+                ->inRandomOrder()
+                ->limit($limit)
+                ->get()
+                ->map(function ($course) {
+                    $intakeMonths = $course->intake->where('intake_status', 1)->pluck('month.core_metaName')->toArray();
+                    
+                    // Check if course is featured (featured_type 30 for course listing page)
+                    $featured = $course->featured->contains(function ($item) {
+                        return $item->featured_type == 30 && $item->featured_status == 1 && $item->featured_startTime < now() && $item->featured_endTime > now();
+                    });
+                    
+                    return [
+                        'id' => $course->id,
+                        'course_id' => $course->id,
+                        'course_name' => $course->course_name,
+                        'course_logo' => $course->course_logo ?? $course->school->school_logo,
+                        'course_qualification' => $course->qualification->qualification_name,
+                        'course_qualification_color' => $course->qualification->qualification_color_code,
+                        'school_id' => $course->school->id,
+                        'school_category' => $course->school->institueCategory->core_metaName,
+                        'school_email' => $course->school->school_email,
+                        'course_school' => $course->school->school_name,
+                        'state' => $course->school->state->state_name ?? null,
+                        'country' => $course->school->country->country_name ?? null,
+                        'country_code' => $course->school->country->country_code ?? null,
+                        'mode' => $course->studyMode->core_metaName ?? null,
+                        'period' => $course->course_period ?? null,
+                        'category_name' => $course->category->category_name ?? null,
+                        'intake' => $intakeMonths,
+                        'cost' => number_format($course->course_cost),
+                        'international_cost' => number_format($course->international_cost),
+                        'affiliating_university' => $course->school->school_name,
+                        'featured' => $featured,
+                    ];
+                });
+
+            return response()->json([
+                'success' => true,
+                'data' => $coursesMightInterested
             ]);
         } catch (\Exception $e) {
             return response()->json([

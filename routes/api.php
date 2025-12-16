@@ -40,6 +40,8 @@ Route::prefix('student')->group(function () {
     Route::post('/courseList', [studentController::class, 'courseList']);
 
     Route::post('/courseDetail', [studentController::class, 'courseDetail']);
+    Route::post('/otherCoursesFromUniversity', [studentController::class, 'otherCoursesFromUniversity']);
+    Route::post('/coursesMightInterested', [studentController::class, 'coursesMightInterested']);
 
     Route::get('/genderList', [studentController::class, 'genderList']);
 

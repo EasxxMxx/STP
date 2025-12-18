@@ -5304,11 +5304,34 @@ class AdminController extends Controller
             $authUser = Auth::user();
             $imagePath = null;
 
-            // Handle the banner file upload
+            // Handle the banner file upload with optimization
             if ($request->hasFile('banner_file')) {
                 $image = $request->file('banner_file');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
+                $extension = strtolower($image->getClientOriginalExtension());
+                $imageName = time() . '.' . $extension;
+                $relativePath = 'bannerFile/' . $imageName;
+
+                // Ensure the directory exists
+                if (!Storage::exists('public/bannerFile')) {
+                    Storage::makeDirectory('public/bannerFile');
+                }
+
+                // For common raster formats, use Intervention Image to compress/optimize
+                if (in_array($extension, ['jpg', 'jpeg', 'png', 'webp'])) {
+                    $fullPath = storage_path('app/public/' . $relativePath);
+
+                    $optimizedImage = Image::make($image->getRealPath());
+
+                    // Encode back to the same format with a high quality setting
+                    // to reduce size while keeping visual quality
+                    $optimizedImage->encode($extension, 80);
+                    $optimizedImage->save($fullPath);
+
+                    $imagePath = $relativePath;
+                } else {
+                    // For other formats (e.g. gif, svg), just store as-is
+                    $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
+                }
             }
 
             // Loop through each featured_id and create a banner for each
@@ -5381,10 +5404,29 @@ class AdminController extends Controller
                     Storage::delete('public/' . $adBanner->banner_file);
                 }
 
-                // Handle file upload
+                // Handle file upload with optimization
                 $image = $request->file('banner_file');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
+                $extension = strtolower($image->getClientOriginalExtension());
+                $imageName = time() . '.' . $extension;
+                $relativePath = 'bannerFile/' . $imageName;
+
+                // Ensure the directory exists
+                if (!Storage::exists('public/bannerFile')) {
+                    Storage::makeDirectory('public/bannerFile');
+                }
+
+                if (in_array($extension, ['jpg', 'jpeg', 'png', 'webp'])) {
+                    $fullPath = storage_path('app/public/' . $relativePath);
+
+                    $optimizedImage = Image::make($image->getRealPath());
+                    $optimizedImage->encode($extension, 80);
+                    $optimizedImage->save($fullPath);
+
+                    $imagePath = $relativePath;
+                } else {
+                    // For other formats (e.g. gif, svg), just store as-is
+                    $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
+                }
 
                 // Update the banner file path
                 $adBanner->banner_file = $imagePath;

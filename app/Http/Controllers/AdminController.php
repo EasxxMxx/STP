@@ -5473,12 +5473,32 @@ class AdminController extends Controller
             ]);
 
             $authUser = Auth::user();
-            if ($request->type == 'disable') {
+            $status = null;
+            $message = null;
+
+            if ($request->type === 'disable') {
+                // Disable banner
                 $status = 0;
-                $message = "Successfully Disable the Banner";
+                $message = "Successfully disabled the banner";
+            } elseif ($request->type === 'enable') {
+                // Enable banner
+                $status = 1;
+                $message = "Successfully enabled the banner";
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid type provided. Allowed values are enable or disable.'
+                ], 422);
             }
 
             $banner = stp_advertisement_banner::find($request->id);
+            if (!$banner) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Banner not found'
+                ], 404);
+            }
+
             $banner->update([
                 'banner_status' => $status,
                 'updated_by' => $authUser->id,
@@ -5488,7 +5508,10 @@ class AdminController extends Controller
 
             return response()->json([
                 'success' => true,
-                'data' => ['message' => $message]
+                'data' => [
+                    'message' => $message,
+                    'new_status' => $status
+                ]
             ]);
         } catch (ValidationException $e) {
             return response()->json([

@@ -5304,34 +5304,11 @@ class AdminController extends Controller
             $authUser = Auth::user();
             $imagePath = null;
 
-            // Handle the banner file upload with optimization
+            // Handle the banner file upload
             if ($request->hasFile('banner_file')) {
                 $image = $request->file('banner_file');
-                $extension = strtolower($image->getClientOriginalExtension());
-                $imageName = time() . '.' . $extension;
-                $relativePath = 'bannerFile/' . $imageName;
-
-                // Ensure the directory exists
-                if (!Storage::exists('public/bannerFile')) {
-                    Storage::makeDirectory('public/bannerFile');
-                }
-
-                // For common raster formats, use Intervention Image to compress/optimize
-                if (in_array($extension, ['jpg', 'jpeg', 'png', 'webp'])) {
-                    $fullPath = storage_path('app/public/' . $relativePath);
-
-                    $optimizedImage = Image::make($image->getRealPath());
-
-                    // Encode back to the same format with a high quality setting
-                    // to reduce size while keeping visual quality
-                    $optimizedImage->encode($extension, 80);
-                    $optimizedImage->save($fullPath);
-
-                    $imagePath = $relativePath;
-                } else {
-                    // For other formats (e.g. gif, svg), just store as-is
-                    $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
-                }
+                $imageName = time() . '.' . $image->getClientOriginalExtension();
+                $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
             }
 
             // Loop through each featured_id and create a banner for each
@@ -5404,29 +5381,10 @@ class AdminController extends Controller
                     Storage::delete('public/' . $adBanner->banner_file);
                 }
 
-                // Handle file upload with optimization
+                // Handle file upload
                 $image = $request->file('banner_file');
-                $extension = strtolower($image->getClientOriginalExtension());
-                $imageName = time() . '.' . $extension;
-                $relativePath = 'bannerFile/' . $imageName;
-
-                // Ensure the directory exists
-                if (!Storage::exists('public/bannerFile')) {
-                    Storage::makeDirectory('public/bannerFile');
-                }
-
-                if (in_array($extension, ['jpg', 'jpeg', 'png', 'webp'])) {
-                    $fullPath = storage_path('app/public/' . $relativePath);
-
-                    $optimizedImage = Image::make($image->getRealPath());
-                    $optimizedImage->encode($extension, 80);
-                    $optimizedImage->save($fullPath);
-
-                    $imagePath = $relativePath;
-                } else {
-                    // For other formats (e.g. gif, svg), just store as-is
-                    $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
-                }
+                $imageName = time() . '.' . $image->getClientOriginalExtension();
+                $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
 
                 // Update the banner file path
                 $adBanner->banner_file = $imagePath;
@@ -5473,32 +5431,12 @@ class AdminController extends Controller
             ]);
 
             $authUser = Auth::user();
-            $status = null;
-            $message = null;
-
-            if ($request->type === 'disable') {
-                // Disable banner
+            if ($request->type == 'disable') {
                 $status = 0;
-                $message = "Successfully disabled the banner";
-            } elseif ($request->type === 'enable') {
-                // Enable banner
-                $status = 1;
-                $message = "Successfully enabled the banner";
-            } else {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Invalid type provided. Allowed values are enable or disable.'
-                ], 422);
+                $message = "Successfully Disable the Banner";
             }
 
             $banner = stp_advertisement_banner::find($request->id);
-            if (!$banner) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Banner not found'
-                ], 404);
-            }
-
             $banner->update([
                 'banner_status' => $status,
                 'updated_by' => $authUser->id,
@@ -5508,10 +5446,7 @@ class AdminController extends Controller
 
             return response()->json([
                 'success' => true,
-                'data' => [
-                    'message' => $message,
-                    'new_status' => $status
-                ]
+                'data' => ['message' => $message]
             ]);
         } catch (ValidationException $e) {
             return response()->json([

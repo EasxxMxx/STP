@@ -223,6 +223,13 @@ Route::prefix('admin')->middleware('auth:sanctum')->group(function () {
     Route::post('/categoryListAdmin', [AdminController::class, 'categoryListAdmin']);
     Route::post('/categoryDetail', [AdminController::class, 'categoryDetail']);
 
+    // Article Category Routes
+    Route::post('/articleCategoryListAdmin', [AdminController::class, 'articleCategoryListAdmin']);
+    Route::post('/addArticleCategory', [AdminController::class, 'addArticleCategory']);
+    Route::post('/editArticleCategory', [AdminController::class, 'editArticleCategory']);
+    Route::post('/articleCategoryDetail', [AdminController::class, 'articleCategoryDetail']);
+    Route::post('/editArticleCategoryStatus', [AdminController::class, 'editArticleCategoryStatus']);
+
     Route::post('/addSubject', [AdminController::class, 'addSubject']);
     Route::post('/editSubject', [AdminController::class, 'editSubject']);
     Route::post('/editSubjectStatus', [AdminController::class, 'editSubjectStatus']);

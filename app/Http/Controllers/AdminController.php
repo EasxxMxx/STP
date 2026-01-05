@@ -20,6 +20,7 @@ use App\Models\stp_country;
 use App\Models\stp_course;
 use App\Models\stp_course_tag;
 use App\Models\stp_courses_category;
+use App\Models\stp_article_category;
 use App\Models\stp_cocurriculum;
 use App\Models\stp_featured;
 use App\Models\stp_featured_request;
@@ -487,7 +488,7 @@ class AdminController extends Controller
     }
 
     public function editStudentStatus(Request $request)
-    {
+     {
         try {
             $authUser = Auth::user();
             $request->validate([
@@ -7768,6 +7769,265 @@ class AdminController extends Controller
                 'message' => "Internal Server Error",
                 'error' => $e->getMessage()
             ]);
+        }
+    }
+
+    // Article Category Methods
+    public function articleCategoryListAdmin(Request $request)
+    {
+        try {
+            $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:name,colorCode',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
+
+            $offset = $request->offset ?? 0;
+            $limit = 10;
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
+
+            // Build query with DB-level filters
+            $query = stp_article_category::query()
+                ->when($request->filled('search'), function ($query) use ($request) {
+                    $query->where(function($q) use ($request) {
+                        $q->where('category_name', 'like', '%' . $request->search . '%')
+                          ->orWhere('description', 'like', '%' . $request->search . '%')
+                          ->orWhere('color_code', 'like', '%' . $request->search . '%');
+                    });
+                })
+                ->when($request->filled('stat'), function ($query) use ($request) {
+                    $query->where('data_status', $request->stat);
+                });
+
+            // DB-level sorting
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'name') {
+                    $query->orderBy('category_name', $sortDirection);
+                } elseif ($sortColumn === 'colorCode') {
+                    $query->orderBy('color_code', $sortDirection);
+                } else {
+                    $query->orderBy('id', 'asc');
+                }
+            } else {
+                $query->orderBy('id', 'asc');
+            }
+
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch current page
+            $categories = $query->skip($offset)->take($limit)->get();
+
+            // Map to response shape
+            $processedData = $categories->map(function ($category) {
+                switch ($category->data_status) {
+                    case 0:
+                        $status = "Disable";
+                        break;
+                    case 1:
+                        $status = "Active";
+                        break;
+                    default:
+                        $status = null;
+                }
+
+                return [
+                    'id' => $category->id,
+                    'name' => $category->category_name,
+                    'description' => $category->description ?? '',
+                    'colorCode' => $category->color_code,
+                    'status' => $status
+                ];
+            })->values();
+
+            $hasMore = ($offset + $limit) < $totalCount;
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function addArticleCategory(Request $request)
+    {
+        try {
+            $request->validate([
+                'name' => 'required|string|max:255|unique:stp_article_category,category_name',
+                'colorCode' => 'required|string|max:50',
+                'description' => 'nullable|string'
+            ]);
+
+            $authUser = Auth::user();
+
+            $data = [
+                "category_name" => $request->name,
+                "color_code" => $request->colorCode,
+                "description" => $request->description ?? null,
+                "data_status" => 1,
+                "created_by" => $authUser->id
+            ];
+
+            stp_article_category::create($data);
+
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => "Successfully added the article category"]
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid Validation',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function editArticleCategory(Request $request)
+    {
+        try {
+            $request->validate([
+                'id' => 'required|integer',
+                'name' => 'required|string|max:255',
+                'colorCode' => 'required|string|max:50',
+                'description' => 'nullable|string'
+            ]);
+
+            $authUser = Auth::user();
+
+            // Check for duplicate category name
+            $checkName = stp_article_category::where('category_name', $request->name)
+                ->where('id', '!=', $request->id)
+                ->exists();
+            if ($checkName) {
+                throw ValidationException::withMessages(['name' => 'Category name has already been used']);
+            }
+
+            // Find the category by ID
+            $category = stp_article_category::find($request->id);
+
+            if (!$category) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article category not found'
+                ], 404);
+            }
+
+            // Prepare the update data
+            $updateData = [
+                'category_name' => $request->name,
+                'color_code' => $request->colorCode,
+                'description' => $request->description ?? null,
+                'updated_by' => $authUser->id
+            ];
+
+            // Update the category
+            $category->update($updateData);
+
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => "Update Successful"]
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid Validation',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function articleCategoryDetail(Request $request)
+    {
+        try {
+            $request->validate([
+                'id' => 'required|integer'
+            ]);
+            $category = stp_article_category::find($request->id);
+
+            if (!$category) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article category not found'
+                ], 404);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $category->id,
+                    'name' => $category->category_name,
+                    'colorCode' => $category->color_code,
+                    'description' => $category->description ?? ''
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'errors' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function editArticleCategoryStatus(Request $request)
+    {
+        try {
+            $request->validate([
+                'id' => 'required|integer',
+                'type' => 'required|string|in:enable,disable'
+            ]);
+
+            $authUser = Auth::user();
+            $category = stp_article_category::find($request->id);
+
+            if (!$category) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article category not found'
+                ], 404);
+            }
+
+            $status = $request->type == 'enable' ? 1 : 0;
+
+            $category->update([
+                'data_status' => $status,
+                'updated_by' => $authUser->id
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => 'Update status successfully']
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 }

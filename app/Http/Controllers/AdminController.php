@@ -21,6 +21,8 @@ use App\Models\stp_course;
 use App\Models\stp_course_tag;
 use App\Models\stp_courses_category;
 use App\Models\stp_article_category;
+use App\Models\stp_article;
+use App\Models\stp_article_content_image;
 use App\Models\stp_cocurriculum;
 use App\Models\stp_featured;
 use App\Models\stp_featured_request;
@@ -8014,6 +8016,595 @@ class AdminController extends Controller
             $status = $request->type == 'enable' ? 1 : 0;
 
             $category->update([
+                'data_status' => $status,
+                'updated_by' => $authUser->id
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => 'Update status successfully']
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function articleListAdmin(Request $request)
+    {
+        try {
+            $request->validate([
+                'search' => 'nullable|string',
+                'stat' => 'nullable|integer',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:title,category,totalViews,publishedOn',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
+
+            $offset = $request->offset ?? 0;
+            $limit = 10;
+            $sortColumn = $request->sort_column;
+            $sortDirection = $request->sort_direction;
+
+            // Build query with DB-level filters
+            $query = stp_article::query()
+                ->with('category')
+                ->when($request->filled('search'), function ($query) use ($request) {
+                    $query->where(function($q) use ($request) {
+                        $q->where('article_title', 'like', '%' . $request->search . '%')
+                          ->orWhere('article_author', 'like', '%' . $request->search . '%')
+                          ->orWhere('article_summary', 'like', '%' . $request->search . '%');
+                    });
+                })
+                ->when($request->filled('stat'), function ($query) use ($request) {
+                    $query->where('data_status', $request->stat);
+                });
+
+            // DB-level sorting
+            if ($sortColumn && $sortDirection) {
+                if ($sortColumn === 'title') {
+                    $query->orderBy('article_title', $sortDirection);
+                } elseif ($sortColumn === 'category') {
+                    $query->orderBy('category_id', $sortDirection);
+                } elseif ($sortColumn === 'totalViews') {
+                    $query->orderBy('article_views', $sortDirection);
+                } elseif ($sortColumn === 'publishedOn') {
+                    $query->orderBy('article_date', $sortDirection);
+                } else {
+                    $query->orderBy('id', 'asc');
+                }
+            } else {
+                $query->orderBy('id', 'asc');
+            }
+
+            // Total count
+            $totalCount = (clone $query)->toBase()->count();
+
+            // Fetch current page
+            $articles = $query->skip($offset)->take($limit)->get();
+
+            // Map to response shape
+            $processedData = $articles->map(function ($article) {
+                switch ($article->data_status) {
+                    case 0:
+                        $status = "Disable";
+                        break;
+                    case 1:
+                        $status = "Active";
+                        break;
+                    default:
+                        $status = null;
+                }
+
+                return [
+                    'id' => $article->id,
+                    'title' => $article->article_title,
+                    'category' => $article->category ? $article->category->category_name : '',
+                    'author' => $article->article_author,
+                    'totalViews' => $article->article_views ?? 0,
+                    'publishedOn' => $article->article_date ? \Carbon\Carbon::parse($article->article_date)->format('d/M/y') : '',
+                    'status' => $status
+                ];
+            })->values();
+
+            $hasMore = ($offset + $limit) < $totalCount;
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedData,
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function addArticle(Request $request)
+    {
+        try {
+            $request->validate([
+                'title' => 'required|string|max:255',
+                'category' => 'required|integer|exists:stp_article_category,id',
+                'author' => 'required|string|max:255',
+                'featuredImage' => 'required|image|mimes:jpeg,png,jpg|max:2048',
+                'summary' => 'nullable|string',
+                'mainPoints1' => 'nullable|string|max:255',
+                'mainPoints2' => 'nullable|string|max:255',
+                'mainPoints3' => 'nullable|string|max:255',
+                'articleContent' => 'nullable|string',
+                'contentImages' => 'nullable|array',
+                'contentImages.*' => 'image|mimes:jpeg,png,jpg|max:2048',
+                'articleFeatured' => 'nullable|boolean'
+            ]);
+
+            $authUser = Auth::user();
+
+            // Handle featured image upload
+            $featuredImagePath = null;
+            if ($request->hasFile('featuredImage')) {
+                $image = $request->file('featuredImage');
+                $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
+                $imagePath = $image->storeAs('article_featured_images', $imageName, 'public');
+                $featuredImagePath = $imagePath;
+            }
+
+            // Create article first (we need the ID for image references)
+            $article = stp_article::create([
+                "category_id" => $request->category,
+                "article_title" => $request->title,
+                "article_author" => $request->author,
+                "article_date" => now()->toDateString(),
+                "article_featured" => $request->has('articleFeatured') && ($request->articleFeatured === '1' || $request->articleFeatured === true || $request->articleFeatured === 'true') ? 1 : 0,
+                "article_views" => 0,
+                "article_featured_image" => $featuredImagePath,
+                "article_summary" => $request->summary ?? null,
+                "article_main_points_1" => $request->mainPoints1 ?? null,
+                "article_main_points_2" => $request->mainPoints2 ?? null,
+                "article_main_points_3" => $request->mainPoints3 ?? null,
+                "article_content" => null, // Will be set after processing
+                "data_status" => 1,
+                "created_by" => $authUser->id
+            ]);
+
+            // Process article content - extract images and save them
+            $contentFilePath = null;
+            $processedHtml = $request->articleContent ?? '';
+            
+            if ($request->filled('articleContent')) {
+                // Extract images from HTML (base64, external URLs, etc.)
+                $imageOrder = 0;
+                $dom = new \DOMDocument();
+                @$dom->loadHTML(mb_convert_encoding($processedHtml, 'HTML-ENTITIES', 'UTF-8'), LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+                $images = $dom->getElementsByTagName('img');
+                
+                foreach ($images as $img) {
+                    $src = $img->getAttribute('src');
+                    $alt = $img->getAttribute('alt') ?? '';
+                    
+                    // Check if it's a base64 image
+                    if (preg_match('/^data:image\/(\w+);base64,(.+)$/', $src, $matches)) {
+                        $imageType = $matches[1];
+                        $imageData = base64_decode($matches[2]);
+                        
+                        // Save base64 image to file
+                        $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $imageType;
+                        $imagePath = 'article_content_images/' . $imageName;
+                        Storage::disk('public')->put($imagePath, $imageData);
+                        
+                        // Save to database
+                        $contentImage = stp_article_content_image::create([
+                            'article_id' => $article->id,
+                            'image_path' => $imagePath,
+                            'image_order' => $imageOrder,
+                            'image_alt' => $alt,
+                            'data_status' => 1,
+                            'created_by' => $authUser->id
+                        ]);
+                        
+                        // Replace base64 with placeholder
+                        $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
+                        $imageOrder++;
+                    }
+                    // Check if it's an external URL (download and save)
+                    elseif (filter_var($src, FILTER_VALIDATE_URL) && !str_contains($src, Storage::disk('public')->url(''))) {
+                        try {
+                            $imageData = file_get_contents($src);
+                            if ($imageData !== false) {
+                                $imageInfo = @getimagesizefromstring($imageData);
+                                if ($imageInfo !== false) {
+                                    $extension = image_type_to_extension($imageInfo[2], false);
+                                    $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $extension;
+                                    $imagePath = 'article_content_images/' . $imageName;
+                                    Storage::disk('public')->put($imagePath, $imageData);
+                                    
+                                    $contentImage = stp_article_content_image::create([
+                                        'article_id' => $article->id,
+                                        'image_path' => $imagePath,
+                                        'image_order' => $imageOrder,
+                                        'image_alt' => $alt,
+                                        'data_status' => 1,
+                                        'created_by' => $authUser->id
+                                    ]);
+                                    
+                                    $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
+                                    $imageOrder++;
+                                }
+                            }
+                        } catch (\Exception $e) {
+                            // If download fails, keep original URL
+                            Log::warning('Failed to download external image: ' . $src);
+                        }
+                    }
+                }
+                
+                // Get processed HTML
+                $processedHtml = $dom->saveHTML();
+                
+                // Save processed HTML to file
+                $contentFileName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.html';
+                $contentPath = 'article_contents/' . $contentFileName;
+                Storage::disk('public')->put($contentPath, $processedHtml);
+                $contentFilePath = $contentPath;
+                
+                // Update article with content file path
+                $article->update(['article_content' => $contentFilePath]);
+            }
+
+            // Handle additional content images upload (separate from HTML)
+            if ($request->hasFile('contentImages')) {
+                $maxOrder = stp_article_content_image::where('article_id', $article->id)->max('image_order') ?? -1;
+                $imageOrder = $maxOrder + 1;
+                
+                $contentImages = $request->file('contentImages');
+                foreach ($contentImages as $image) {
+                    $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $image->getClientOriginalExtension();
+                    $imagePath = $image->storeAs('article_content_images', $imageName, 'public');
+                    
+                    stp_article_content_image::create([
+                        'article_id' => $article->id,
+                        'image_path' => $imagePath,
+                        'image_order' => $imageOrder,
+                        'data_status' => 1,
+                        'created_by' => $authUser->id
+                    ]);
+                    
+                    $imageOrder++;
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => "Successfully added the article"]
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid Validation',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function editArticle(Request $request)
+    {
+        try {
+            $request->validate([
+                'id' => 'required|integer',
+                'title' => 'required|string|max:255',
+                'category' => 'required|integer|exists:stp_article_category,id',
+                'author' => 'required|string|max:255',
+                'featuredImage' => 'nullable|image|mimes:jpeg,png,jpg|max:2048',
+                'summary' => 'nullable|string',
+                'mainPoints1' => 'nullable|string|max:255',
+                'mainPoints2' => 'nullable|string|max:255',
+                'mainPoints3' => 'nullable|string|max:255',
+                'articleContent' => 'nullable|string',
+                'contentImages' => 'nullable|array',
+                'contentImages.*' => 'image|mimes:jpeg,png,jpg|max:2048',
+                'deletedImageIds' => 'nullable|array',
+                'deletedImageIds.*' => 'integer',
+                'articleFeatured' => 'nullable|boolean'
+            ]);
+
+            $authUser = Auth::user();
+
+            // Find the article by ID
+            $article = stp_article::find($request->id);
+
+            if (!$article) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article not found'
+                ], 404);
+            }
+
+            // Handle featured image upload if new image is provided
+            $featuredImagePath = $article->article_featured_image;
+            if ($request->hasFile('featuredImage')) {
+                // Delete old image if exists
+                if ($article->article_featured_image && Storage::disk('public')->exists($article->article_featured_image)) {
+                    Storage::disk('public')->delete($article->article_featured_image);
+                }
+                
+                $image = $request->file('featuredImage');
+                $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
+                $imagePath = $image->storeAs('article_featured_images', $imageName, 'public');
+                $featuredImagePath = $imagePath;
+            }
+
+            // Handle article content - extract images and save as HTML file if new content is provided
+            $contentFilePath = $article->article_content;
+            if ($request->filled('articleContent')) {
+                // Delete old content file if exists
+                if ($article->article_content && Storage::disk('public')->exists($article->article_content)) {
+                    Storage::disk('public')->delete($article->article_content);
+                }
+                
+                // Process HTML to extract images
+                $processedHtml = $request->articleContent;
+                $dom = new \DOMDocument();
+                @$dom->loadHTML(mb_convert_encoding($processedHtml, 'HTML-ENTITIES', 'UTF-8'), LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+                $images = $dom->getElementsByTagName('img');
+                
+                // Get current max image order
+                $maxOrder = stp_article_content_image::where('article_id', $article->id)->max('image_order') ?? -1;
+                $imageOrder = $maxOrder + 1;
+                
+                foreach ($images as $img) {
+                    $src = $img->getAttribute('src');
+                    $alt = $img->getAttribute('alt') ?? '';
+                    
+                    // Skip if already a placeholder
+                    if (preg_match('/^\[IMAGE_ID:(\d+)\]$/', $src, $matches)) {
+                        // Image already exists, keep the placeholder
+                        continue;
+                    }
+                    
+                    // Check if it's a base64 image
+                    if (preg_match('/^data:image\/(\w+);base64,(.+)$/', $src, $matches)) {
+                        $imageType = $matches[1];
+                        $imageData = base64_decode($matches[2]);
+                        
+                        // Save base64 image to file
+                        $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $imageType;
+                        $imagePath = 'article_content_images/' . $imageName;
+                        Storage::disk('public')->put($imagePath, $imageData);
+                        
+                        // Save to database
+                        $contentImage = stp_article_content_image::create([
+                            'article_id' => $article->id,
+                            'image_path' => $imagePath,
+                            'image_order' => $imageOrder,
+                            'image_alt' => $alt,
+                            'data_status' => 1,
+                            'created_by' => $authUser->id
+                        ]);
+                        
+                        // Replace base64 with placeholder
+                        $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
+                        $imageOrder++;
+                    }
+                    // Check if it's an external URL (download and save)
+                    elseif (filter_var($src, FILTER_VALIDATE_URL) && !str_contains($src, Storage::disk('public')->url(''))) {
+                        try {
+                            $imageData = file_get_contents($src);
+                            if ($imageData !== false) {
+                                $imageInfo = @getimagesizefromstring($imageData);
+                                if ($imageInfo !== false) {
+                                    $extension = image_type_to_extension($imageInfo[2], false);
+                                    $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $extension;
+                                    $imagePath = 'article_content_images/' . $imageName;
+                                    Storage::disk('public')->put($imagePath, $imageData);
+                                    
+                                    $contentImage = stp_article_content_image::create([
+                                        'article_id' => $article->id,
+                                        'image_path' => $imagePath,
+                                        'image_order' => $imageOrder,
+                                        'image_alt' => $alt,
+                                        'data_status' => 1,
+                                        'created_by' => $authUser->id
+                                    ]);
+                                    
+                                    $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
+                                    $imageOrder++;
+                                }
+                            }
+                        } catch (\Exception $e) {
+                            // If download fails, keep original URL
+                            Log::warning('Failed to download external image: ' . $src);
+                        }
+                    }
+                }
+                
+                // Get processed HTML
+                $processedHtml = $dom->saveHTML();
+                
+                // Save processed HTML to file
+                $contentFileName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.html';
+                $contentPath = 'article_contents/' . $contentFileName;
+                Storage::disk('public')->put($contentPath, $processedHtml);
+                $contentFilePath = $contentPath;
+            }
+
+            // Prepare the update data
+            $updateData = [
+                'category_id' => $request->category,
+                'article_title' => $request->title,
+                'article_author' => $request->author,
+                'article_featured_image' => $featuredImagePath,
+                'article_featured' => $request->has('articleFeatured') && ($request->articleFeatured === '1' || $request->articleFeatured === true || $request->articleFeatured === 'true') ? 1 : 0,
+                'article_summary' => $request->summary ?? null,
+                'article_main_points_1' => $request->mainPoints1 ?? null,
+                'article_main_points_2' => $request->mainPoints2 ?? null,
+                'article_main_points_3' => $request->mainPoints3 ?? null,
+                'article_content' => $contentFilePath,
+                'updated_by' => $authUser->id
+            ];
+
+            // Update the article
+            $article->update($updateData);
+
+            // Handle deleted content images
+            if ($request->filled('deletedImageIds')) {
+                foreach ($request->deletedImageIds as $imageId) {
+                    $contentImage = stp_article_content_image::find($imageId);
+                    if ($contentImage && $contentImage->article_id == $article->id) {
+                        // Delete image file
+                        if (Storage::disk('public')->exists($contentImage->image_path)) {
+                            Storage::disk('public')->delete($contentImage->image_path);
+                        }
+                        // Delete record
+                        $contentImage->delete();
+                    }
+                }
+            }
+
+            // Handle new content images upload
+            if ($request->hasFile('contentImages')) {
+                // Get current max order
+                $maxOrder = stp_article_content_image::where('article_id', $article->id)->max('image_order') ?? -1;
+                $imageOrder = $maxOrder + 1;
+                
+                $contentImages = $request->file('contentImages');
+                foreach ($contentImages as $image) {
+                    $imageName = time() . '_' . uniqid() . '_' . $imageOrder . '.' . $image->getClientOriginalExtension();
+                    $imagePath = $image->storeAs('article_content_images', $imageName, 'public');
+                    
+                    stp_article_content_image::create([
+                        'article_id' => $article->id,
+                        'image_path' => $imagePath,
+                        'image_order' => $imageOrder,
+                        'data_status' => 1,
+                        'created_by' => $authUser->id
+                    ]);
+                    
+                    $imageOrder++;
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => ['message' => "Update Successful"]
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid Validation',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function articleDetail(Request $request)
+    {
+        try {
+            $request->validate([
+                'id' => 'required|integer'
+            ]);
+            $article = stp_article::with(['category', 'contentImages'])->find($request->id);
+
+            if (!$article) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article not found'
+                ], 404);
+            }
+
+            $featuredImageUrl = null;
+            if ($article->article_featured_image) {
+                $featuredImageUrl = Storage::disk('public')->url($article->article_featured_image);
+            }
+
+            // Read article content from file
+            $articleContent = '';
+            if ($article->article_content && Storage::disk('public')->exists($article->article_content)) {
+                $articleContent = Storage::disk('public')->get($article->article_content);
+            }
+
+            // Get content images with URLs
+            $contentImages = $article->contentImages->map(function ($image) {
+                return [
+                    'id' => $image->id,
+                    'url' => Storage::disk('public')->url($image->image_path),
+                    'path' => $image->image_path,
+                    'order' => $image->image_order,
+                    'alt' => $image->image_alt ?? ''
+                ];
+            })->values();
+
+            // Replace image placeholders in HTML with actual image URLs
+            foreach ($contentImages as $image) {
+                $placeholder = '[IMAGE_ID:' . $image['id'] . ']';
+                $articleContent = str_replace($placeholder, $image['url'], $articleContent);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $article->id,
+                    'title' => $article->article_title,
+                    'category_id' => $article->category_id,
+                    'author' => $article->article_author,
+                    'featured_image' => $featuredImageUrl,
+                    'article_featured' => $article->article_featured ?? 0,
+                    'summary' => $article->article_summary ?? '',
+                    'main_points_1' => $article->article_main_points_1 ?? '',
+                    'main_points_2' => $article->article_main_points_2 ?? '',
+                    'main_points_3' => $article->article_main_points_3 ?? '',
+                    'content' => $articleContent,
+                    'content_images' => $contentImages
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'errors' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function editArticleStatus(Request $request)
+    {
+        try {
+            $request->validate([
+                'id' => 'required|integer',
+                'type' => 'required|string|in:enable,disable'
+            ]);
+
+            $authUser = Auth::user();
+            $article = stp_article::find($request->id);
+
+            if (!$article) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article not found'
+                ], 404);
+            }
+
+            $status = $request->type == 'enable' ? 1 : 0;
+
+            $article->update([
                 'data_status' => $status,
                 'updated_by' => $authUser->id
             ]);

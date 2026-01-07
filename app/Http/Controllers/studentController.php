@@ -500,6 +500,47 @@ class studentController extends Controller
 
 
 
+            // Free education schemes (school + course)
+            $schoolFreeEducationSchemes = stp_school_free_education::where('school_id', $courseList->school->id)
+                ->where('stp_school_free_education.data_status', 1)
+                ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->select(
+                    'stp_free_education.id',
+                    'stp_free_education.scheme_name',
+                    'stp_free_education.text_color_code',
+                    'stp_free_education.background_color_code',
+                    'stp_free_education.data_status'
+                )
+                ->get()
+                ->map(function ($scheme) {
+                    return [
+                        'id' => (int) $scheme->id,
+                        'scheme_name' => $scheme->scheme_name,
+                        'text_color_code' => $scheme->text_color_code,
+                        'background_color_code' => $scheme->background_color_code,
+                        'data_status' => (int) $scheme->data_status,
+                    ];
+                })
+                ->toArray();
+
+            $courseFreeEducationSchemes = stp_course_free_education::where('course_id', $courseList->id)
+                ->where('stp_course_free_education.data_status', 1)
+                ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->select(
+                    'stp_free_education.id',
+                    'stp_free_education.scheme_name',
+                    'stp_free_education.data_status'
+                )
+                ->get()
+                ->map(function ($scheme) {
+                    return [
+                        'id' => (int) $scheme->id,
+                        'scheme_name' => $scheme->scheme_name,
+                        'data_status' => (int) $scheme->data_status,
+                    ];
+                })
+                ->toArray();
+
             $courseListDetail = [
                 'id' => $courseList->id,
                 'course' => $courseList->course_name,
@@ -527,7 +568,9 @@ class studentController extends Controller
                 'logo' => $logo,
                 'coverPhoto' => $coverPhoto ?? null,
                 'schoolPhoto' => $schoolPhoto ?? null,
-                'tag' => $tagList
+                'tag' => $tagList,
+                'school_free_education_schemes' => $schoolFreeEducationSchemes,
+                'course_free_education_schemes' => $courseFreeEducationSchemes,
             ];
 
             return response()->json([

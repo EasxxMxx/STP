@@ -1266,6 +1266,8 @@ class studentController extends Controller
                 'gender' => $authUser->detail->studentGender->core_metaName ?? null,
                 'address' => $authUser->detail->student_detailAddress,
                 'country' => $authUser->detail->country->country_name ?? null,
+                // Explicitly return state_id for front-end badge/filter checks (e.g., Sarawak)
+                'state_id' => $authUser->detail->state_id ?? $authUser->detail->state->id ?? null,
                 'state' => $authUser->detail->state->state_name ?? null,
                 'city' => $authUser->detail->city->city_name ?? null,
                 'postcode' => $authUser->detail->student_detailPostcode,

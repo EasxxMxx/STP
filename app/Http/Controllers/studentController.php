@@ -427,6 +427,54 @@ class studentController extends Controller
         }
     }
 
+    public function schoolListForDropdown(Request $request)
+    {
+        try {
+            // Validation
+            $request->validate([
+                'countryID' => 'nullable|integer',
+            ]);
+
+            // Query to get all active schools (no pagination)
+            $query = stp_school::query()
+                ->whereNotIn('school_status', [0, 4])
+                ->when($request->filled('countryID'), function ($q) use ($request) {
+                    $q->where('country_id', $request->countryID);
+                })
+                ->orderBy('school_name', 'asc')
+                ->with(['institueCategory', 'country', 'state', 'city']);
+
+            $schools = $query->get();
+
+            // Transform schools to simple format for dropdown
+            $transformedSchools = $schools->map(function ($school) {
+                return [
+                    'id' => $school->id,
+                    'school_name' => $school->school_name,
+                    'name' => $school->school_name, // Alias for compatibility
+                    'institution_name' => $school->school_name, // Alias for compatibility
+                    'category' => $school->institueCategory->core_metaName ?? null,
+                    'logo' => $school->school_logo,
+                    'country' => $school->country->country_name ?? null,
+                    'state' => $school->state->state_name ?? null,
+                    'city' => $school->city->city_name ?? null,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $transformedSchools->values()->all(),
+                'total' => $transformedSchools->count()
+            ]);
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => "Internal Server Error",
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function courseDetail(Request $request)
     {
 
@@ -842,6 +890,7 @@ class studentController extends Controller
                 'studyMode' => 'array',
                 'tuitionFee' => 'numeric',
                 'intake' => 'array',
+                'school_id' => 'integer',
                 'freeForSarawakian' => 'nullable|boolean',
                 'per_page' => 'nullable|integer|min:1|max:100',
                 'offset' => 'nullable|integer|min:0'
@@ -851,16 +900,19 @@ class studentController extends Controller
                 $query->whereHas('school', function ($q) {
                     $q->whereIn('school_status', ["1", "3"]);
                 })
-                    ->where('course_status', 1)
+                    ->where('stp_courses.course_status', 1)
+                    ->when($request->filled('school_id'), function ($q) use ($request) {
+                        $q->where('stp_courses.school_id', $request->school_id);
+                    })
                     ->when($request->filled('qualification'), function ($q) use ($request) {
-                        $q->where('qualification_id', $request->qualification);
+                        $q->where('stp_courses.qualification_id', $request->qualification);
                     })
                     ->when($request->filled('category'), function ($q) use ($request) {
-                        $q->whereIn('category_id', $request->category);
+                        $q->whereIn('stp_courses.category_id', $request->category);
                     })
                     ->when($request->filled('search'), function ($q) use ($request) {
                         $q->where(function ($subQuery) use ($request) {
-                            $subQuery->where('course_name', 'like', '%' . $request->search . '%')
+                            $subQuery->where('stp_courses.course_name', 'like', '%' . $request->search . '%')
                                 ->orWhereHas('school', function ($q) use ($request) {
                                     $q->where('school_name', 'like', '%' . $request->search . '%');
                                 });
@@ -877,7 +929,7 @@ class studentController extends Controller
                         });
                     })
                     ->when($request->filled('studyMode'), function ($q) use ($request) {
-                        $q->whereIn('study_mode', $request->studyMode);
+                        $q->whereIn('stp_courses.study_mode', $request->studyMode);
                     })
                     ->when($request->filled('location'), function ($q) use ($request) {
                         $q->whereHas('school', function ($q) use ($request) {
@@ -885,7 +937,7 @@ class studentController extends Controller
                         });
                     })
                     ->when($request->filled('tuitionFee'), function ($q) use ($request) {
-                        $q->where('course_cost', '<=', $request->tuitionFee);
+                        $q->where('stp_courses.course_cost', '<=', $request->tuitionFee);
                     })
                     ->when($request->filled('intake'), function ($q) use ($request) {
                         $q->whereHas('intake', function ($q) use ($request) {

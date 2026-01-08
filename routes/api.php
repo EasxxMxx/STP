@@ -35,6 +35,7 @@ Route::prefix('student')->group(function () {
     Route::post('/hpFeaturedSchoolList', [studentController::class, 'hpFeaturedSchoolList']);
     Route::post('/hpFeaturedCoursesList', [studentController::class, 'hpFeaturedCoursesList']);
     Route::post('/schoolList', [studentController::class, 'schoolList']);
+    Route::post('/schoolListForDropdown', [studentController::class, 'schoolListForDropdown']);
     Route::post('/schoolDetail', [studentController::class, 'schoolDetail']);
     Route::post('/categoryList', [studentController::class, 'categoryList']);
     Route::post('/courseList', [studentController::class, 'courseList']);

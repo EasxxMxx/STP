@@ -786,7 +786,8 @@ class studentController extends Controller
                 'institute' => 'integer',
                 'studyMode' => 'array',
                 'tuitionFee' => 'numeric',
-                'intake' => 'array'
+                'intake' => 'array',
+                'school_id' => 'integer'
             ]);
 
             $filterConditions = function ($query) use ($request) {
@@ -794,6 +795,11 @@ class studentController extends Controller
                     $q->whereIn('school_status', ["1", "3"]);
                 })
                     ->where('course_status', 1)
+                    ->when($request->filled('school_id'), function ($q) use ($request) {
+                        $q->whereHas('school', function ($sq) use ($request) {
+                            $sq->where('school_id', $request->school_id);
+                        });
+                    })
                     ->when($request->filled('qualification'), function ($q) use ($request) {
                         $q->where('qualification_id', $request->qualification);
                     })

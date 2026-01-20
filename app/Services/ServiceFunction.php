@@ -16,6 +16,8 @@ use App\Mail\ReplyEnquiryEmail;
 use App\Mail\SendInterestedCourseCategoryEmail;
 use App\Mail\AdminCourseCategoryInterested;
 use App\Mail\SendCustomSchoolApplicationAdmin;
+use App\Mail\SendWelcomeEmail;
+use App\Mail\SendApplyCourseEmail;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
 
@@ -161,5 +163,38 @@ class ServiceFunction
     public function adminCourseCategoryInterested($category, $totalNumber, $schoolEmail, $schoolName)
     {
         Mail::to($schoolEmail)->send(new AdminCourseCategoryInterested($category, $totalNumber, $schoolName));
+    }
+
+    public function sendWelcomeEmail($studentName, $studentEmail)
+    {
+        try {
+            $data = [
+                'student_name' => $studentName,
+                'student_email' => $studentEmail,
+            ];
+
+            Mail::to($studentEmail)->send(new SendWelcomeEmail($data));
+        } catch (\Exception $e) {
+            // Log the error but don't fail registration if email fails
+            Log::error('Failed to send welcome email: ' . $e->getMessage());
+        }
+    }
+
+    public function sendCourseApplicationConfirmation($student, $course, $submittedAt)
+    {
+        try {
+            $data = [
+                'student_name' => $student->student_userName,
+                'course_name' => $course->course_name,
+                'school_name' => $course->school->school_name,
+                'submitted_at' => $submittedAt->format('F j, Y'),
+                'actionUrl' => 'https://studypal.my/studentDashboard'
+            ];
+
+            Mail::to($student->student_email)->send(new SendApplyCourseEmail($data));
+        } catch (\Exception $e) {
+            // Log only; don't block the application flow if email fails
+            Log::error('Failed to send course application confirmation: ' . $e->getMessage());
+        }
     }
 }

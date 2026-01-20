@@ -16,9 +16,16 @@ use Illuminate\Support\Facades\Validator;
 use PhpParser\Node\Stmt\Else_;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationData;
+use App\Services\ServiceFunction;
 
 class AuthController extends Controller
 {
+    protected $serviceFunction;
+
+    public function __construct(ServiceFunction $serviceFunction)
+    {
+        $this->serviceFunction = $serviceFunction;
+    }
     public function test()
     {
         $user = User::find(1);
@@ -397,11 +404,19 @@ class AuthController extends Controller
                 'message' => 'Validation Error',
                 'errors' => $e->errors()
             ], 422);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Handle database constraint violations
+            return response()->json([
+                'success' => false,
+                'message' => 'Database Error: Duplicate entry detected',
+                'error' => $e->getMessage()
+            ], 500);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Internal Sever Error',
-                'error' => $e
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage(),
+                'error_type' => get_class($e)
             ], 500);
         }
     }
@@ -428,10 +443,6 @@ class AuthController extends Controller
                 // ->where('student_status', 1)
                 ->exists();
 
-
-
-
-
             if ($checkingUser) {
                 throw ValidationException::withMessages([
                     'contact_no' => ['Contact has been used'],
@@ -445,7 +456,7 @@ class AuthController extends Controller
             }
 
             $checkEmailWithSocialLogin = stp_student::where('student_email', $request->email)
-                ->where('student_password', null)
+                ->whereNull('student_password')
                 ->first();
 
             if ($checkEmailWithSocialLogin) {
@@ -458,6 +469,9 @@ class AuthController extends Controller
                     'student_icNumber' => $request->ic,
                 ];
                 $checkEmailWithSocialLogin->update($data);
+
+                // Send welcome email for social login user completing registration
+                $this->serviceFunction->sendWelcomeEmail($request->name, $request->email);
             } else {
                 $data = [
                     'student_userName' => $request->name,
@@ -473,6 +487,9 @@ class AuthController extends Controller
                 $userdetail = stp_student_detail::create([
                     'student_id' => $newUser->id
                 ]);
+
+                // Send welcome email to newly registered student
+                $this->serviceFunction->sendWelcomeEmail($request->name, $request->email);
             }
 
             return response()->json(
@@ -491,8 +508,8 @@ class AuthController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Internal Sever Error',
-                'error' => $e
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
             ], 500);
         }
     }
@@ -546,8 +563,8 @@ class AuthController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Internal Sever Error',
-                'error' => $e
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
             ], 500);
         }
     }

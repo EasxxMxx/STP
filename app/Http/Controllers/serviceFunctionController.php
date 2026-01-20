@@ -321,6 +321,11 @@ class serviceFunctionController extends Controller
         }
     }
 
+    public function sendCourseAppliedConfirmation($student, $course, $submittedAt)
+    {
+        $this->serviceFunction->sendCourseApplicationConfirmation($student, $course, $submittedAt);
+    }
+
     public function importCountry(Request $request)
     {
         try {

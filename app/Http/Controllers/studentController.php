@@ -36,8 +36,12 @@ use Illuminate\Support\Facades\Storage;
 use App\Models\stp_advertisement_banner;
 use App\Models\stp_personalityTestResult;
 use App\Models\stp_riasecResultImage;
+use App\Models\stp_article_category;
+use App\Models\stp_article;
+use App\Models\stp_article_content_image;
 
 use App\Models\stp_totalNumberVisit;
+use App\Models\stp_article_visit;
 // use Dotenv\Exception\ValidationException;
 use Illuminate\Validation\ValidationException;
 
@@ -1720,6 +1724,9 @@ class studentController extends Controller
             } else {
                 $this->serviceFunctionController->sendSchoolEmail($request->courseID, $authUser, $newApplicant->id);
             }
+
+            // Send confirmation email to the applicant
+            $this->serviceFunctionController->sendCourseAppliedConfirmation($authUser, $newApplicant->course, now());
 
 
 
@@ -4641,6 +4648,212 @@ class studentController extends Controller
         }
     }
 
+    public function increaseArticleVisit(Request $request)
+    {
+        try {
+            $request->validate([
+                'article_id' => 'required|integer'
+            ]);
+
+            $articleId = $request->article_id;
+
+            // Check if article exists and is active
+            $article = stp_article::where('id', $articleId)
+                ->where('data_status', 1)
+                ->first();
+
+            if (!$article) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Article not found or inactive"
+                ], 404);
+            }
+
+            // Check if visit record exists for today
+            $validateExistData = stp_article_visit::where('article_id', $articleId)
+                ->whereDay('created_at', \Carbon\Carbon::now()->day)
+                ->whereMonth('created_at', \Carbon\Carbon::now()->month)
+                ->whereYear('created_at', \Carbon\Carbon::now()->year)
+                ->where('status', 1)
+                ->first();
+
+            if (empty($validateExistData)) {
+                // Create new visit record for today
+                $formData = [
+                    'article_id' => $articleId,
+                    'totalNumberVisit' => 1,
+                    'status' => 1
+                ];
+                $createData = stp_article_visit::create($formData);
+                if ($createData) {
+                    return response()->json([
+                        'success' => true,
+                        'data' => [
+                            'message' => "Article visit recorded successfully"
+                        ]
+                    ]);
+                } else {
+                    throw new \Exception("Failed to create article visit data");
+                }
+            } else {
+                // Increment existing visit count for today
+                $validateExistData->increment('totalNumberVisit');
+                return response()->json([
+                    'success' => true,
+                    'data' => [
+                        'message' => "Article visit count updated successfully",
+                        'totalNumberVisit' => $validateExistData->totalNumberVisit
+                    ]
+                ]);
+            }
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => "Internal Server Error",
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function articleDetail(Request $request)
+    {
+        try {
+            $request->validate([
+                'id' => 'required|integer'
+            ]);
+            
+            // Fetch article with category and content images, only active articles
+            $article = stp_article::with(['category', 'contentImages'])
+                ->where('id', $request->id)
+                ->where('data_status', 1)
+                ->first();
+
+            if (!$article) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article not found or inactive'
+                ], 404);
+            }
+
+            // Generate URLs for files in public/storage
+            $featuredImageUrl = null;
+            if ($article->article_featured_image) {
+                $baseUrl = url('/');
+                $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
+            }
+
+            // Read article content from file - from public/storage
+            $articleContent = '';
+            if ($article->article_content && file_exists(public_path('storage/' . $article->article_content))) {
+                $articleContent = file_get_contents(public_path('storage/' . $article->article_content));
+            }
+
+            // URL-decode the content to handle URL-encoded placeholders (e.g., %5BIMAGE_ID:16%5D -> [IMAGE_ID:16])
+            $articleContent = urldecode($articleContent);
+
+            // Get content images with URLs - from public/storage
+            // Load images separately to ensure they're loaded correctly
+            $contentImages = stp_article_content_image::where('article_id', $article->id)
+                ->where('data_status', 1)
+                ->orderBy('id')
+                ->get()
+                ->filter(function ($image) {
+                    return !empty($image->image_path);
+                })
+                ->map(function ($image) {
+                    $baseUrl = url('/');
+                    return [
+                        'id' => $image->id,
+                        'url' => rtrim($baseUrl, '/') . '/storage/' . ltrim($image->image_path, '/'),
+                        'path' => $image->image_path,
+                        'alt' => $image->image_alt ?? ''
+                    ];
+                })
+                ->values();
+
+            // Replace image placeholders in HTML with actual image URLs
+            // Use a comprehensive approach: regex for img tags + string replace as fallback
+            foreach ($contentImages as $image) {
+                $placeholder = '[IMAGE_ID:' . $image['id'] . ']';
+                $imageUrl = $image['url'];
+                
+                // Also handle URL-encoded version of placeholder
+                $encodedPlaceholder = urlencode($placeholder);
+                
+                // Escape the placeholder for regex (brackets are special characters)
+                $escapedPlaceholder = preg_quote($placeholder, '/');
+                $escapedEncodedPlaceholder = preg_quote($encodedPlaceholder, '/');
+                
+                // Method 1: Replace in img src attributes with double quotes (most common)
+                // Handles: <img src="[IMAGE_ID:14]"> or <img ... src="[IMAGE_ID:14]">
+                // Also handles URL-encoded: <img src="%5BIMAGE_ID:14%5D">
+                $articleContent = preg_replace(
+                    '/(<img[^>]*\s+src=["])(' . $escapedPlaceholder . '|' . $escapedEncodedPlaceholder . ')(["][^>]*>)/i',
+                    '$1' . $imageUrl . '$3',
+                    $articleContent
+                );
+                
+                // Method 2: Replace in img src attributes with single quotes
+                // Handles: <img src='[IMAGE_ID:14]'> or <img ... src='[IMAGE_ID:14]'>
+                $articleContent = preg_replace(
+                    '/(<img[^>]*\s+src=[\'])(' . $escapedPlaceholder . '|' . $escapedEncodedPlaceholder . ')([\'][^>]*>)/i',
+                    '$1' . $imageUrl . '$3',
+                    $articleContent
+                );
+                
+                // Method 3: Replace in img src attributes without quotes (edge case)
+                // Handles: <img src=[IMAGE_ID:14]> or <img ... src=[IMAGE_ID:14]>
+                $articleContent = preg_replace(
+                    '/(<img[^>]*\s+src=)(' . $escapedPlaceholder . '|' . $escapedEncodedPlaceholder . ')([\s>])/i',
+                    '$1' . $imageUrl . '$3',
+                    $articleContent
+                );
+                
+                // Method 4: Replace anywhere in the content (catches any edge cases)
+                // This is the most reliable fallback - handles both encoded and non-encoded
+                $articleContent = str_replace($placeholder, $imageUrl, $articleContent);
+                $articleContent = str_replace($encodedPlaceholder, $imageUrl, $articleContent);
+            }
+            
+            // Remove any remaining placeholders for images with data_status = 0
+            // This handles cases where old HTML files might still have placeholders for deleted images
+            $deletedImageIds = stp_article_content_image::where('article_id', $article->id)
+                ->where('data_status', 0)
+                ->pluck('id')
+                ->toArray();
+            
+            foreach ($deletedImageIds as $deletedId) {
+                $placeholder = '[IMAGE_ID:' . $deletedId . ']';
+                // Remove img tags that contain the deleted image placeholder in src attribute
+                $articleContent = preg_replace('/<img[^>]*src=["\'][^"\']*' . preg_quote($placeholder, '/') . '[^"\']*["\']*[^>]*>/i', '', $articleContent);
+            }
+
+            // Format date
+            $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $article->id,
+                    'title' => $article->article_title,
+                    'category_id' => $article->category_id,
+                    'category_name' => $article->category ? $article->category->category_name : 'Uncategorized',
+                    'author' => $article->article_author,
+                    'date' => $formattedDate,
+                    'featured_image' => $featuredImageUrl,
+                    'content' => $articleContent,
+                    'content_images' => $contentImages
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function updateICPassport(Request $request)
     {
         try {
@@ -4755,6 +4968,874 @@ class studentController extends Controller
                 'message' => "Internal Server Error",
                 'error' => $e->getMessage()
             ]);
+        }
+    }
+
+    public function articleCategoryList(Request $request)
+    {
+        try {
+            // Get all active article categories ordered by ID ascending
+            $categories = stp_article_category::where('data_status', 1)
+                ->orderBy('id', 'asc')
+                ->get();
+
+            // Process categories to generate slugs and format response
+            $processedCategories = $categories->map(function ($category) {
+                // Generate slug from category name
+                $slug = \Illuminate\Support\Str::slug($category->category_name, '-');
+                
+                return [
+                    'id' => $category->id,
+                    'name' => strtoupper($category->category_name),
+                    'slug' => $slug,
+                    'colorCode' => $category->color_code,
+                    'description' => $category->description ?? ''
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedCategories
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function articleHeroList(Request $request)
+    {
+        try {
+            // Calculate date 30 days ago
+            $thirtyDaysAgo = \Carbon\Carbon::now()->subDays(30)->format('Y-m-d');
+            
+            // Fetch up to 3 random articles published within the last 30 days
+            // Use a consistent seed based on date to ensure same results within the same day
+            $articles = stp_article::where('data_status', 1)
+                ->where('article_date', '>=', $thirtyDaysAgo)
+                ->where('article_date', '<=', \Carbon\Carbon::now()->format('Y-m-d'))
+                ->with('category')
+                ->inRandomOrder()
+                ->limit(3)
+                ->get();
+
+            // Process articles to format response
+            $processedArticles = $articles->map(function ($article) {
+                // Get category name
+                $categoryName = $article->category ? $article->category->category_name : 'Uncategorized';
+                
+                // Format featured image URL - files are in public/storage
+                $featuredImageUrl = null;
+                if ($article->article_featured_image) {
+                    // Check if it's already a full URL
+                    if (filter_var($article->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $featuredImageUrl = $article->article_featured_image;
+                    } else {
+                        // Generate URL for files in public/storage directory
+                        // Path format: article_featured_images/filename.jpg
+                        $baseUrl = url('/');
+                        $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
+                    }
+                }
+                
+                // Format date
+                $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+                
+                return [
+                    'id' => $article->id,
+                    'category' => strtoupper($categoryName),
+                    'author' => $article->article_author,
+                    'date' => $formattedDate,
+                    'title' => $article->article_title,
+                    'featuredImage' => $featuredImageUrl,
+                    'commentCount' => 0 // Hardcoded as requested
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedArticles
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function firstThreeArticles(Request $request)
+    {
+        try {
+            // Get hero article IDs from request parameter (passed from frontend)
+            $heroArticleIds = [];
+            if ($request->has('excludeIds')) {
+                $excludeIds = $request->excludeIds;
+                if (is_array($excludeIds)) {
+                    $heroArticleIds = array_filter($excludeIds, function($id) {
+                        return is_numeric($id) && $id > 0;
+                    });
+                } elseif (is_string($excludeIds)) {
+                    // Handle comma-separated string
+                    $ids = explode(',', $excludeIds);
+                    $heroArticleIds = array_filter(array_map('intval', $ids), function($id) {
+                        return $id > 0;
+                    });
+                }
+                // Convert to integers for proper comparison
+                $heroArticleIds = array_map('intval', $heroArticleIds);
+            }
+
+            // Fetch exactly 3 random articles (no date limit), excluding hero section articles
+            $query = stp_article::where('data_status', 1)
+                ->with('category');
+            
+            // Exclude hero section articles if any exist
+            if (!empty($heroArticleIds)) {
+                $query->whereNotIn('id', $heroArticleIds);
+            }
+            
+            $articles = $query->inRandomOrder()
+                ->limit(3)
+                ->get();
+
+            // Process articles to format response
+            $processedArticles = $articles->map(function ($article) {
+                // Get category name
+                $categoryName = $article->category ? $article->category->category_name : 'Uncategorized';
+                
+                // Format featured image URL - files are in public/storage
+                $featuredImageUrl = null;
+                if ($article->article_featured_image) {
+                    // Check if it's already a full URL
+                    if (filter_var($article->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $featuredImageUrl = $article->article_featured_image;
+                    } else {
+                        // Generate URL for files in public/storage directory
+                        $baseUrl = url('/');
+                        $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
+                    }
+                }
+                
+                // Format date
+                $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+                
+                return [
+                    'id' => $article->id,
+                    'category' => strtoupper($categoryName),
+                    'author' => $article->article_author,
+                    'date' => $formattedDate,
+                    'title' => $article->article_title,
+                    'featuredImage' => $featuredImageUrl,
+                    'commentCount' => 0 // Hardcoded as requested
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => $processedArticles
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function articleHeroAndFirstThree(Request $request)
+    {
+        try {
+            // Calculate date 30 days ago
+            $thirtyDaysAgo = \Carbon\Carbon::now()->subDays(30)->format('Y-m-d');
+            
+            // Fetch up to 3 random articles published within the last 30 days for hero section
+            $heroArticles = stp_article::where('data_status', 1)
+                ->where('article_date', '>=', $thirtyDaysAgo)
+                ->where('article_date', '<=', \Carbon\Carbon::now()->format('Y-m-d'))
+                ->with('category')
+                ->inRandomOrder()
+                ->limit(3)
+                ->get();
+
+            // Get hero article IDs to exclude
+            $heroArticleIds = $heroArticles->pluck('id')->toArray();
+
+            // Fetch exactly 3 random articles (no date limit), excluding hero section articles
+            $query = stp_article::where('data_status', 1)
+                ->with('category');
+            
+            // Exclude hero section articles
+            if (!empty($heroArticleIds)) {
+                $query->whereNotIn('id', $heroArticleIds);
+            }
+            
+            $firstThreeArticles = $query->inRandomOrder()
+                ->limit(3)
+                ->get();
+
+            // Process hero articles
+            $processedHeroArticles = $heroArticles->map(function ($article) {
+                $categoryName = $article->category ? $article->category->category_name : 'Uncategorized';
+                $featuredImageUrl = null;
+                if ($article->article_featured_image) {
+                    if (filter_var($article->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $featuredImageUrl = $article->article_featured_image;
+                    } else {
+                        $baseUrl = url('/');
+                        $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
+                    }
+                }
+                $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+                
+                return [
+                    'id' => $article->id,
+                    'category' => strtoupper($categoryName),
+                    'author' => $article->article_author,
+                    'date' => $formattedDate,
+                    'title' => $article->article_title,
+                    'featuredImage' => $featuredImageUrl,
+                    'commentCount' => 0
+                ];
+            })->values();
+
+            // Process first three articles
+            $processedFirstThree = $firstThreeArticles->map(function ($article) {
+                $categoryName = $article->category ? $article->category->category_name : 'Uncategorized';
+                $featuredImageUrl = null;
+                if ($article->article_featured_image) {
+                    if (filter_var($article->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $featuredImageUrl = $article->article_featured_image;
+                    } else {
+                        $baseUrl = url('/');
+                        $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
+                    }
+                }
+                $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+                
+                return [
+                    'id' => $article->id,
+                    'category' => strtoupper($categoryName),
+                    'author' => $article->article_author,
+                    'date' => $formattedDate,
+                    'title' => $article->article_title,
+                    'featuredImage' => $featuredImageUrl,
+                    'commentCount' => 0
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'heroArticles' => $processedHeroArticles,
+                    'firstThreeArticles' => $processedFirstThree
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function latestArticles(Request $request)
+    {
+        try {
+            // IMPORTANT: This function is ONLY used by the Articles page (/articles)
+            // It excludes UNIVERSITY NEWS category because that category has its own section (.recent-news-content)
+            // Category pages use articlesByCategory() which does NOT exclude any categories
+            // Get the UNIVERSITY NEWS category ID to exclude
+            $universityNewsCategory = stp_article_category::where('data_status', 1)
+                ->whereRaw('UPPER(category_name) = ?', ['UNIVERSITY NEWS'])
+                ->first();
+            
+            $excludeCategoryId = $universityNewsCategory ? $universityNewsCategory->id : null;
+
+            // Build query for articles excluding UNIVERSITY NEWS category
+            $baseQuery = stp_article::where('data_status', 1)
+                ->with('category')
+                ->orderBy('article_date', 'DESC')
+                ->orderBy('id', 'DESC'); // Secondary sort for consistency
+            
+            // Exclude UNIVERSITY NEWS category if it exists
+            if ($excludeCategoryId) {
+                $baseQuery->where('category_id', '!=', $excludeCategoryId);
+            }
+
+            // Fetch the single most recent article (featured)
+            $featuredArticle = (clone $baseQuery)->first();
+
+            $featuredArticleData = null;
+            $latestArticlesData = [];
+
+            if ($featuredArticle) {
+                // Process featured article
+                $categoryName = $featuredArticle->category ? $featuredArticle->category->category_name : 'Uncategorized';
+                $featuredImageUrl = null;
+                if ($featuredArticle->article_featured_image) {
+                    if (filter_var($featuredArticle->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $featuredImageUrl = $featuredArticle->article_featured_image;
+                    } else {
+                        $baseUrl = url('/');
+                        $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($featuredArticle->article_featured_image, '/');
+                    }
+                }
+                $formattedDate = \Carbon\Carbon::parse($featuredArticle->article_date)->format('F j, Y');
+                
+                $featuredArticleData = [
+                    'id' => $featuredArticle->id,
+                    'isFeatured' => true,
+                    'image' => $featuredImageUrl,
+                    'category' => strtoupper($categoryName),
+                    'author' => $featuredArticle->article_author,
+                    'date' => $formattedDate,
+                    'commentCount' => 0,
+                    'title' => $featuredArticle->article_title,
+                    'excerpt' => null // Featured articles don't have excerpt
+                ];
+
+                // Fetch the next most recent articles after the featured one
+                // Exclude the featured article and UNIVERSITY NEWS category
+                $latestQuery = stp_article::where('data_status', 1)
+                    ->with('category')
+                    ->where('id', '!=', $featuredArticle->id)
+                    ->orderBy('article_date', 'DESC')
+                    ->orderBy('id', 'DESC');
+                
+                // Exclude UNIVERSITY NEWS category if it exists
+                if ($excludeCategoryId) {
+                    $latestQuery->where('category_id', '!=', $excludeCategoryId);
+                }
+                
+                // Fetch a maximum of 4 latest articles (after the featured one)
+                $latestArticles = $latestQuery
+                    ->limit(4)
+                    ->get();
+
+                // Process latest articles
+                $latestArticlesData = $latestArticles->map(function ($article) {
+                    $categoryName = $article->category ? $article->category->category_name : 'Uncategorized';
+                    $featuredImageUrl = null;
+                    if ($article->article_featured_image) {
+                        if (filter_var($article->article_featured_image, FILTER_VALIDATE_URL)) {
+                            $featuredImageUrl = $article->article_featured_image;
+                        } else {
+                            $baseUrl = url('/');
+                            $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
+                        }
+                    }
+                    $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+                    
+                    // Extract excerpt from article content (HTML file) or use summary as fallback
+                    $excerpt = null;
+                    if ($article->article_content && file_exists(public_path('storage/' . $article->article_content))) {
+                        // Read HTML content from file
+                        $htmlContent = file_get_contents(public_path('storage/' . $article->article_content));
+                        // Strip HTML tags and get plain text
+                        $plainText = strip_tags($htmlContent);
+                        // Clean up whitespace
+                        $plainText = preg_replace('/\s+/', ' ', trim($plainText));
+                        // Get first 150 characters
+                        if (strlen($plainText) > 150) {
+                            $excerpt = substr($plainText, 0, 150) . '...';
+                        } else {
+                            $excerpt = $plainText;
+                        }
+                    } elseif ($article->article_summary) {
+                        // Fallback to summary if content file doesn't exist
+                        $excerpt = strlen($article->article_summary) > 150 
+                            ? substr($article->article_summary, 0, 150) . '...' 
+                            : $article->article_summary;
+                    }
+                    
+                    return [
+                        'id' => $article->id,
+                        'isFeatured' => false,
+                        'image' => $featuredImageUrl,
+                        'category' => strtoupper($categoryName),
+                        'author' => $article->article_author,
+                        'date' => $formattedDate,
+                        'commentCount' => 0,
+                        'title' => $article->article_title,
+                        'excerpt' => $excerpt
+                    ];
+                })->values()->toArray();
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'featuredArticle' => $featuredArticleData,
+                    'latestArticles' => $latestArticlesData
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function recentNewsArticles(Request $request)
+    {
+        try {
+            // Find the UNIVERSITY NEWS category
+            $universityNewsCategory = stp_article_category::where('data_status', 1)
+                ->whereRaw('UPPER(category_name) = ?', ['UNIVERSITY NEWS'])
+                ->first();
+
+            if (!$universityNewsCategory) {
+                return response()->json([
+                    'success' => true,
+                    'data' => []
+                ]);
+            }
+
+            // Fetch up to 4 UNIVERSITY NEWS articles ordered by published date (DESC)
+            $articles = stp_article::where('data_status', 1)
+                ->where('category_id', $universityNewsCategory->id)
+                ->with('category')
+                ->orderBy('article_date', 'DESC')
+                ->orderBy('id', 'DESC')
+                ->limit(4)
+                ->get();
+
+            $processed = $articles->map(function ($article) {
+                $categoryName = $article->category ? $article->category->category_name : 'UNIVERSITY NEWS';
+
+                // Build featured image URL if available
+                $featuredImageUrl = null;
+                if ($article->article_featured_image) {
+                    if (filter_var($article->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $featuredImageUrl = $article->article_featured_image;
+                    } else {
+                        $baseUrl = url('/');
+                        $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
+                    }
+                }
+
+                $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+
+                return [
+                    'id' => $article->id,
+                    'image' => $featuredImageUrl,
+                    'title' => $article->article_title,
+                    'author' => $article->article_author,
+                    'date' => $formattedDate,
+                    'category' => strtoupper($categoryName),
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => $processed
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get trending articles for student portal based on highest total visit count.
+     * Returns up to 4 articles ordered by total visits (DESC), then latest date.
+     */
+    public function trendingArticles(Request $request)
+    {
+        try {
+            $limit = 4;
+
+            // Build query joining articles with visits for total visit count
+            $rows = DB::table('stp_article as a')
+                ->leftJoin('stp_article_visits as v', 'v.article_id', '=', 'a.id')
+                ->leftJoin('stp_article_category as c', 'c.id', '=', 'a.category_id')
+                ->where('a.data_status', 1) // Only active articles
+                ->select(
+                    'a.id',
+                    'a.article_title',
+                    'a.article_author',
+                    'a.article_date',
+                    'a.article_featured_image',
+                    'c.category_name',
+                    DB::raw('COALESCE(SUM(v.totalNumberVisit), 0) as total_visit')
+                )
+                ->groupBy(
+                    'a.id',
+                    'a.article_title',
+                    'a.article_author',
+                    'a.article_date',
+                    'a.article_featured_image',
+                    'c.category_name'
+                )
+                ->orderByDesc('total_visit')
+                ->orderBy('a.article_date', 'DESC')
+                ->orderBy('a.id', 'DESC')
+                ->limit($limit)
+                ->get();
+
+            $processed = $rows->map(function ($row) {
+                $categoryName = $row->category_name ?: 'Uncategorized';
+
+                // Build featured image URL if available
+                $featuredImageUrl = null;
+                if (!empty($row->article_featured_image)) {
+                    if (filter_var($row->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $featuredImageUrl = $row->article_featured_image;
+                    } else {
+                        $baseUrl = url('/');
+                        $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($row->article_featured_image, '/');
+                    }
+                }
+
+                $formattedDate = $row->article_date
+                    ? \Carbon\Carbon::parse($row->article_date)->format('F j, Y')
+                    : '';
+
+                return [
+                    'id' => $row->id,
+                    'image' => $featuredImageUrl,
+                    'title' => $row->article_title,
+                    'category' => strtoupper($categoryName),
+                    'author' => $row->article_author,
+                    'date' => $formattedDate,
+                    // Comment count is hardcoded for now as requested
+                    'commentCount' => 0,
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => $processed
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function trendingArticlesByCategory(Request $request)
+    {
+        try {
+            $request->validate([
+                'categorySlug' => 'required|string'
+            ]);
+
+            $limit = 4;
+
+            // Find category by slug
+            $category = stp_article_category::where('data_status', 1)
+                ->get()
+                ->first(function ($cat) use ($request) {
+                    $slug = \Illuminate\Support\Str::slug($cat->category_name, '-');
+                    return $slug === $request->categorySlug;
+                });
+
+            if (!$category) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Category not found'
+                ], 404);
+            }
+
+            // Build query joining articles with visits for total visit count, filtered by category
+            $rows = DB::table('stp_article as a')
+                ->leftJoin('stp_article_visits as v', 'v.article_id', '=', 'a.id')
+                ->leftJoin('stp_article_category as c', 'c.id', '=', 'a.category_id')
+                ->where('a.data_status', 1) // Only active articles
+                ->where('a.category_id', $category->id) // Filter by category
+                ->select(
+                    'a.id',
+                    'a.article_title',
+                    'a.article_author',
+                    'a.article_date',
+                    'a.article_featured_image',
+                    'c.category_name',
+                    DB::raw('COALESCE(SUM(v.totalNumberVisit), 0) as total_visit')
+                )
+                ->groupBy(
+                    'a.id',
+                    'a.article_title',
+                    'a.article_author',
+                    'a.article_date',
+                    'a.article_featured_image',
+                    'c.category_name'
+                )
+                ->orderByDesc('total_visit')
+                ->orderBy('a.article_date', 'DESC')
+                ->orderBy('a.id', 'DESC')
+                ->limit($limit)
+                ->get();
+
+            $processed = $rows->map(function ($row) {
+                $categoryName = $row->category_name ?: 'Uncategorized';
+
+                // Build featured image URL if available
+                $featuredImageUrl = null;
+                if (!empty($row->article_featured_image)) {
+                    if (filter_var($row->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $featuredImageUrl = $row->article_featured_image;
+                    } else {
+                        $baseUrl = url('/');
+                        $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($row->article_featured_image, '/');
+                    }
+                }
+
+                $formattedDate = $row->article_date
+                    ? \Carbon\Carbon::parse($row->article_date)->format('F j, Y')
+                    : '';
+
+                return [
+                    'id' => $row->id,
+                    'image' => $featuredImageUrl,
+                    'title' => $row->article_title,
+                    'category' => strtoupper($categoryName),
+                    'author' => $row->article_author,
+                    'date' => $formattedDate,
+                    // Comment count is hardcoded for now as requested
+                    'commentCount' => 0,
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => $processed
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function featuredArticlesByCategory(Request $request)
+    {
+        try {
+            $request->validate([
+                'categorySlug' => 'required|string'
+            ]);
+
+            $limit = 3;
+
+            // Find category by slug
+            $category = stp_article_category::where('data_status', 1)
+                ->get()
+                ->first(function ($cat) use ($request) {
+                    $slug = \Illuminate\Support\Str::slug($cat->category_name, '-');
+                    return $slug === $request->categorySlug;
+                });
+
+            if (!$category) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Category not found'
+                ], 404);
+            }
+
+            // Fetch up to 3 random featured articles from this category
+            $articles = stp_article::where('data_status', 1)
+                ->where('category_id', $category->id)
+                ->where('article_featured', 1)
+                ->with('category')
+                ->inRandomOrder()
+                ->limit($limit)
+                ->get();
+
+            $processed = $articles->map(function ($article) {
+                $categoryName = $article->category ? $article->category->category_name : 'Uncategorized';
+
+                $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+
+                // Extract excerpt from article content (HTML file) or use summary as fallback
+                $excerpt = null;
+                if ($article->article_content && file_exists(public_path('storage/' . $article->article_content))) {
+                    $htmlContent = file_get_contents(public_path('storage/' . $article->article_content));
+                    $plainText = strip_tags($htmlContent);
+                    $plainText = preg_replace('/\s+/', ' ', trim($plainText));
+                    if (strlen($plainText) > 150) {
+                        $excerpt = substr($plainText, 0, 150) . '...';
+                    } else {
+                        $excerpt = $plainText;
+                    }
+                } elseif ($article->article_summary) {
+                    $excerpt = strlen($article->article_summary) > 150
+                        ? substr($article->article_summary, 0, 150) . '...'
+                        : $article->article_summary;
+                }
+
+                return [
+                    'id' => $article->id,
+                    'title' => $article->article_title,
+                    'author' => $article->article_author,
+                    'date' => $formattedDate,
+                    'category' => strtoupper($categoryName),
+                    'excerpt' => $excerpt,
+                    // Keep hardcoded for now as requested
+                    'commentCount' => 0,
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => $processed
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function articlesByCategory(Request $request)
+    {
+        try {
+            $request->validate([
+                'categorySlug' => 'required|string'
+            ]);
+
+            // IMPORTANT: This function treats ALL categories equally, including University News
+            // There is NO exclusion logic here - all categories get the same treatment
+            // Find category by slug
+            $category = stp_article_category::where('data_status', 1)
+                ->get()
+                ->first(function ($cat) use ($request) {
+                    $slug = \Illuminate\Support\Str::slug($cat->category_name, '-');
+                    return $slug === $request->categorySlug;
+                });
+
+            if (!$category) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Category not found'
+                ], 404);
+            }
+
+            // Fetch random articles from this category
+            // IMPORTANT: For latest-articles-category, we want TRUE randomization
+            // Get a completely random article from ALL articles in the category (not just featured)
+            // This ensures latest-articles-category shows different articles on each refresh
+            // Previously prioritized article_featured=1, which caused same article to always show
+            $featuredArticle = stp_article::where('data_status', 1)
+                ->where('category_id', $category->id)
+                ->with('category')
+                ->inRandomOrder()
+                ->first();
+
+            // Note: $otherArticles was previously fetched but not used in the response
+            // Removed to avoid confusion - only featuredArticle and latestArticles are returned
+
+            // Process featured article
+            $featuredArticleData = null;
+            $excludeIds = [];
+            
+            if ($featuredArticle) {
+                $categoryName = $featuredArticle->category ? $featuredArticle->category->category_name : 'Uncategorized';
+                
+                // Format featured image URL
+                $featuredImageUrl = null;
+                if ($featuredArticle->article_featured_image) {
+                    if (filter_var($featuredArticle->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $featuredImageUrl = $featuredArticle->article_featured_image;
+                    } else {
+                        $baseUrl = url('/');
+                        $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($featuredArticle->article_featured_image, '/');
+                    }
+                }
+                
+                $formattedDate = \Carbon\Carbon::parse($featuredArticle->article_date)->format('F j, Y');
+                
+                $featuredArticleData = [
+                    'id' => $featuredArticle->id,
+                    'isFeatured' => true,
+                    'category' => strtoupper($categoryName),
+                    'author' => $featuredArticle->article_author,
+                    'date' => $formattedDate,
+                    'title' => $featuredArticle->article_title,
+                    'featuredImage' => $featuredImageUrl,
+                    'commentCount' => 0, // Hardcoded as requested
+                    'mainPoint1' => $featuredArticle->article_main_points_1 ?? '',
+                    'mainPoint2' => $featuredArticle->article_main_points_2 ?? '',
+                    'mainPoint3' => $featuredArticle->article_main_points_3 ?? ''
+                ];
+                
+                // Add featured article ID to exclude list
+                $excludeIds[] = $featuredArticle->id;
+            }
+
+            // Fetch random articles from this category (for recent-news-content-category section)
+            // Exclude the featured article and limit to 5
+            // IMPORTANT: This is completely separate from latest-articles-category (featuredArticle)
+            // Both sections are randomized independently and do not influence each other
+            $latestArticlesQuery = stp_article::where('data_status', 1)
+                ->where('category_id', $category->id)
+                ->with('category')
+                ->inRandomOrder(); // Truly random, not ordered by date
+
+            // Exclude featured article if it exists
+            if (!empty($excludeIds)) {
+                $latestArticlesQuery->whereNotIn('id', $excludeIds);
+            }
+
+            $latestArticles = $latestArticlesQuery->limit(5)->get();
+
+            // Process latest articles
+            $latestArticlesData = $latestArticles->map(function ($article) {
+                $categoryName = $article->category ? $article->category->category_name : 'Uncategorized';
+                
+                // Format featured image URL
+                $imageUrl = null;
+                if ($article->article_featured_image) {
+                    if (filter_var($article->article_featured_image, FILTER_VALIDATE_URL)) {
+                        $imageUrl = $article->article_featured_image;
+                    } else {
+                        $baseUrl = url('/');
+                        $imageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
+                    }
+                }
+                
+                $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+                
+                return [
+                    'id' => $article->id,
+                    'title' => $article->article_title,
+                    'author' => $article->article_author,
+                    'date' => $formattedDate,
+                    'featuredImage' => $imageUrl
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'featuredArticle' => $featuredArticleData,
+                    'latestArticles' => $latestArticlesData,
+                    'otherArticles' => [] // Not used in this section, but available if needed
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 }

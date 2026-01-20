@@ -38,6 +38,7 @@ use App\Models\stp_subject;
 use App\Models\stp_tag;
 use App\Models\stp_personalityQuestions;
 use App\Models\stp_totalNumberVisit;
+use App\Models\stp_article_visit;
 use Exception;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -7774,6 +7775,133 @@ class AdminController extends Controller
         }
     }
 
+    public function adminArticleVisit(Request $request)
+    {
+        try {
+            $request->validate([
+                'article_title' => 'nullable|string',
+                'start_date' => 'nullable|date',
+                'end_date' => 'nullable|date',
+                'offset' => 'nullable|integer|min:0',
+                'sort_column' => 'nullable|string|in:article_title,today_visit,month_visit,total_visit,year_visit,FilteredVisit',
+                'sort_direction' => 'nullable|string|in:asc,desc'
+            ]);
+
+            $offset = $request->offset ?? 0;
+            $limit = 10; // Fixed limit of 10 items per request
+            $sortColumn = $request->sort_column ?? null;
+            $sortDirection = $request->sort_direction ?? null;
+
+            $startDate = $request->start_date ? Carbon::parse($request->start_date)->startOfDay() : null;
+            $endDate = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : null;
+            
+            // Handle single date scenarios - only if at least one date is provided
+            if ($startDate && !$endDate) {
+                $endDate = $startDate->copy()->endOfDay();
+            } elseif (!$startDate && $endDate) {
+                $startDate = $endDate->copy()->startOfDay();
+            }
+            
+
+            // Build base query with SQL aggregations for performance
+            $baseQuery = DB::table('stp_article as a')
+                ->leftJoin('stp_article_visits as v', 'v.article_id', '=', 'a.id')
+                ->where('a.data_status', 1) // Only active articles
+                ->when($request->article_title, function ($query, $articleTitle) {
+                    $query->where('a.article_title', 'like', '%' . $articleTitle . '%');
+                })
+                ->select([
+                    'a.id as article_id',
+                    'a.article_title',
+                    'a.article_author',
+                    'a.article_date',
+                    DB::raw("COALESCE(SUM(v.totalNumberVisit), 0) as total_visit"),
+                    DB::raw("COALESCE(SUM(CASE WHEN DATE(v.created_at) = CURDATE() THEN v.totalNumberVisit ELSE 0 END), 0) as today_visit"),
+                    DB::raw("COALESCE(SUM(CASE WHEN YEAR(v.created_at) = YEAR(CURDATE()) AND MONTH(v.created_at) = MONTH(CURDATE()) THEN v.totalNumberVisit ELSE 0 END), 0) as month_visit"),
+                    DB::raw("COALESCE(SUM(CASE WHEN YEAR(v.created_at) = YEAR(CURDATE()) THEN v.totalNumberVisit ELSE 0 END), 0) as year_visit"),
+                ])
+                ->groupBy('a.id', 'a.article_title', 'a.article_author', 'a.article_date');
+
+            // Apply filtered visit only when date range is provided (check for non-empty values)
+            if (!empty($request->start_date) || !empty($request->end_date)) {
+                $filteredSub = DB::table('stp_article_visits')
+                    ->select('article_id', DB::raw('SUM(totalNumberVisit) as FilteredVisit'))
+                    ->whereBetween('created_at', [$startDate, $endDate])
+                    ->groupBy('article_id');
+
+                $baseQuery->leftJoinSub($filteredSub, 'fv', function ($join) {
+                    $join->on('fv.article_id', '=', 'a.id');
+                })->addSelect(DB::raw('COALESCE(MAX(fv.FilteredVisit), 0) as FilteredVisit'));
+            } else {
+                $baseQuery->addSelect(DB::raw('0 as FilteredVisit'));
+            }
+
+            // Apply sorting
+            if ($sortColumn && $sortDirection) {
+                $columnMap = [
+                    'article_title' => 'a.article_title',
+                    'today_visit' => 'today_visit',
+                    'month_visit' => 'month_visit',
+                    'total_visit' => 'total_visit',
+                    'year_visit' => 'year_visit',
+                    'FilteredVisit' => 'FilteredVisit',
+                ];
+                $dbCol = $columnMap[$sortColumn] ?? 'a.created_at';
+                $baseQuery->orderBy($dbCol, $sortDirection);
+            } else {
+                // default sorting: show latest data (most recent visit activity first)
+                $baseQuery->orderByRaw('COALESCE(SUM(v.totalNumberVisit), 0) DESC, a.created_at DESC');
+            }
+
+            // Clone for total count (without offset/limit)
+            $allRows = $baseQuery->get();
+            
+
+            // Only apply date range filtering if dates are provided in the original request (check for non-empty values)
+            if (!empty($request->start_date) || !empty($request->end_date)) {
+                // Check if there are any visits in the date range first
+                $hasVisitsInRange = DB::table('stp_article_visits')->whereBetween('created_at', [$startDate, $endDate])->exists();
+                
+                if ($hasVisitsInRange) {
+                    $allRows = $allRows->filter(function ($row) {
+                        return (int)($row->FilteredVisit ?? 0) > 0;
+                    })->values();
+                }
+                // If no visits in date range, show all articles with 0 FilteredVisit
+            }
+
+            $totalCount = $allRows->count();
+            $paginated = $allRows->slice($offset, $limit)->values();
+            $hasMore = ($offset + $limit) < $totalCount;
+
+            \Log::info('AdminArticleVisit API Success', [
+                'data_count' => $paginated->count(),
+                'total' => $totalCount,
+                'has_more' => $hasMore
+            ]);
+            
+            return response()->json([
+                'success' => true,
+                'data' => $paginated,
+                'has_more' => $hasMore,
+                'total' => $totalCount,
+                'offset' => $offset,
+                'limit' => $limit
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('AdminArticleVisit API Error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => "Internal Server Error",
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     // Article Category Methods
     public function articleCategoryListAdmin(Request $request)
     {
@@ -8147,13 +8275,17 @@ class AdminController extends Controller
 
             $authUser = Auth::user();
 
-            // Handle featured image upload
+            // Handle featured image upload - save to public/storage
             $featuredImagePath = null;
             if ($request->hasFile('featuredImage')) {
                 $image = $request->file('featuredImage');
                 $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('article_featured_images', $imageName, 'public');
-                $featuredImagePath = $imagePath;
+                $destinationPath = public_path('storage/article_featured_images');
+                if (!file_exists($destinationPath)) {
+                    mkdir($destinationPath, 0755, true);
+                }
+                $image->move($destinationPath, $imageName);
+                $featuredImagePath = 'article_featured_images/' . $imageName;
             }
 
             // Create article first (we need the ID for image references)
@@ -8180,7 +8312,6 @@ class AdminController extends Controller
             
             if ($request->filled('articleContent')) {
                 // Extract images from HTML (base64, external URLs, etc.)
-                $imageOrder = 0;
                 $dom = new \DOMDocument();
                 @$dom->loadHTML(mb_convert_encoding($processedHtml, 'HTML-ENTITIES', 'UTF-8'), LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
                 $images = $dom->getElementsByTagName('img');
@@ -8194,16 +8325,24 @@ class AdminController extends Controller
                         $imageType = $matches[1];
                         $imageData = base64_decode($matches[2]);
                         
-                        // Save base64 image to file
-                        $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $imageType;
+                        // Save base64 image to file - save to public/storage
+                        $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $imageType;
                         $imagePath = 'article_content_images/' . $imageName;
-                        Storage::disk('public')->put($imagePath, $imageData);
+                        $destinationPath = public_path('storage/article_content_images');
+                        if (!file_exists($destinationPath)) {
+                            mkdir($destinationPath, 0755, true);
+                        }
+                        file_put_contents(public_path('storage/' . $imagePath), $imageData);
+                        
+                        // Generate default alt text if missing
+                        if (empty($alt)) {
+                            $alt = 'Article image for ' . $article->article_title;
+                        }
                         
                         // Save to database
                         $contentImage = stp_article_content_image::create([
                             'article_id' => $article->id,
                             'image_path' => $imagePath,
-                            'image_order' => $imageOrder,
                             'image_alt' => $alt,
                             'data_status' => 1,
                             'created_by' => $authUser->id
@@ -8211,7 +8350,6 @@ class AdminController extends Controller
                         
                         // Replace base64 with placeholder
                         $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
-                        $imageOrder++;
                     }
                     // Check if it's an external URL (download and save)
                     elseif (filter_var($src, FILTER_VALIDATE_URL) && !str_contains($src, Storage::disk('public')->url(''))) {
@@ -8221,21 +8359,28 @@ class AdminController extends Controller
                                 $imageInfo = @getimagesizefromstring($imageData);
                                 if ($imageInfo !== false) {
                                     $extension = image_type_to_extension($imageInfo[2], false);
-                                    $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $extension;
+                                    $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $extension;
                                     $imagePath = 'article_content_images/' . $imageName;
-                                    Storage::disk('public')->put($imagePath, $imageData);
+                                    $destinationPath = public_path('storage/article_content_images');
+                                    if (!file_exists($destinationPath)) {
+                                        mkdir($destinationPath, 0755, true);
+                                    }
+                                    file_put_contents(public_path('storage/' . $imagePath), $imageData);
+                                    
+                                    // Generate default alt text if missing
+                                    if (empty($alt)) {
+                                        $alt = 'Article image for ' . $article->article_title;
+                                    }
                                     
                                     $contentImage = stp_article_content_image::create([
                                         'article_id' => $article->id,
                                         'image_path' => $imagePath,
-                                        'image_order' => $imageOrder,
                                         'image_alt' => $alt,
                                         'data_status' => 1,
                                         'created_by' => $authUser->id
                                     ]);
                                     
                                     $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
-                                    $imageOrder++;
                                 }
                             }
                         } catch (\Exception $e) {
@@ -8248,35 +8393,38 @@ class AdminController extends Controller
                 // Get processed HTML
                 $processedHtml = $dom->saveHTML();
                 
-                // Save processed HTML to file
+                // Save processed HTML to file - save to public/storage
                 $contentFileName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.html';
                 $contentPath = 'article_contents/' . $contentFileName;
-                Storage::disk('public')->put($contentPath, $processedHtml);
+                $destinationPath = public_path('storage/article_contents');
+                if (!file_exists($destinationPath)) {
+                    mkdir($destinationPath, 0755, true);
+                }
+                file_put_contents(public_path('storage/' . $contentPath), $processedHtml);
                 $contentFilePath = $contentPath;
                 
                 // Update article with content file path
                 $article->update(['article_content' => $contentFilePath]);
             }
 
-            // Handle additional content images upload (separate from HTML)
+            // Handle additional content images upload (separate from HTML) - save to public/storage
             if ($request->hasFile('contentImages')) {
-                $maxOrder = stp_article_content_image::where('article_id', $article->id)->max('image_order') ?? -1;
-                $imageOrder = $maxOrder + 1;
-                
                 $contentImages = $request->file('contentImages');
+                $destinationPath = public_path('storage/article_content_images');
+                if (!file_exists($destinationPath)) {
+                    mkdir($destinationPath, 0755, true);
+                }
                 foreach ($contentImages as $image) {
-                    $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $image->getClientOriginalExtension();
-                    $imagePath = $image->storeAs('article_content_images', $imageName, 'public');
+                    $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
+                    $image->move($destinationPath, $imageName);
+                    $imagePath = 'article_content_images/' . $imageName;
                     
                     stp_article_content_image::create([
                         'article_id' => $article->id,
                         'image_path' => $imagePath,
-                        'image_order' => $imageOrder,
                         'data_status' => 1,
                         'created_by' => $authUser->id
                     ]);
-                    
-                    $imageOrder++;
                 }
             }
 
@@ -8301,6 +8449,9 @@ class AdminController extends Controller
 
     public function editArticle(Request $request)
     {
+        // Increase execution time limit for this operation (article editing can take time)
+        set_time_limit(120); // 2 minutes
+        
         try {
             $request->validate([
                 'id' => 'required|integer',
@@ -8317,7 +8468,7 @@ class AdminController extends Controller
                 'contentImages.*' => 'image|mimes:jpeg,png,jpg|max:2048',
                 'deletedImageIds' => 'nullable|array',
                 'deletedImageIds.*' => 'integer',
-                'articleFeatured' => 'nullable|boolean'
+                'articleFeatured' => 'nullable'
             ]);
 
             $authUser = Auth::user();
@@ -8335,42 +8486,86 @@ class AdminController extends Controller
             // Handle featured image upload if new image is provided
             $featuredImagePath = $article->article_featured_image;
             if ($request->hasFile('featuredImage')) {
-                // Delete old image if exists
-                if ($article->article_featured_image && Storage::disk('public')->exists($article->article_featured_image)) {
-                    Storage::disk('public')->delete($article->article_featured_image);
+                // Delete old image if exists - from public/storage
+                if ($article->article_featured_image && file_exists(public_path('storage/' . $article->article_featured_image))) {
+                    unlink(public_path('storage/' . $article->article_featured_image));
                 }
                 
                 $image = $request->file('featuredImage');
                 $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('article_featured_images', $imageName, 'public');
-                $featuredImagePath = $imagePath;
+                $destinationPath = public_path('storage/article_featured_images');
+                if (!file_exists($destinationPath)) {
+                    mkdir($destinationPath, 0755, true);
+                }
+                $image->move($destinationPath, $imageName);
+                $featuredImagePath = 'article_featured_images/' . $imageName;
             }
 
             // Handle article content - extract images and save as HTML file if new content is provided
             $contentFilePath = $article->article_content;
+            
             if ($request->filled('articleContent')) {
                 // Delete old content file if exists
-                if ($article->article_content && Storage::disk('public')->exists($article->article_content)) {
-                    Storage::disk('public')->delete($article->article_content);
+                // Delete old content file from public/storage
+                if ($article->article_content && file_exists(public_path('storage/' . $article->article_content))) {
+                    try {
+                        @unlink(public_path('storage/' . $article->article_content));
+                    } catch (\Exception $e) {
+                        // Log but don't fail if file deletion fails
+                        Log::warning('Failed to delete old article content file: ' . $e->getMessage());
+                    }
                 }
                 
                 // Process HTML to extract images
                 $processedHtml = $request->articleContent;
-                $dom = new \DOMDocument();
-                @$dom->loadHTML(mb_convert_encoding($processedHtml, 'HTML-ENTITIES', 'UTF-8'), LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
-                $images = $dom->getElementsByTagName('img');
                 
-                // Get current max image order
-                $maxOrder = stp_article_content_image::where('article_id', $article->id)->max('image_order') ?? -1;
-                $imageOrder = $maxOrder + 1;
+                // URL decode the content if it's encoded (handles cases where content was saved encoded)
+                if (preg_match('/%5BIMAGE_ID:/', $processedHtml)) {
+                    $processedHtml = urldecode($processedHtml);
+                }
                 
-                foreach ($images as $img) {
+                // Handle empty or invalid HTML
+                if (empty(trim($processedHtml))) {
+                    // If content is empty, create an empty HTML file
+                    $contentFileName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.html';
+                    $contentPath = 'article_contents/' . $contentFileName;
+                    $destinationPath = public_path('storage/article_contents');
+                    if (!file_exists($destinationPath)) {
+                        mkdir($destinationPath, 0755, true);
+                    }
+                    file_put_contents(public_path('storage/' . $contentPath), '');
+                    $contentFilePath = $contentPath;
+                } else {
+                    try {
+                        $dom = new \DOMDocument();
+                        libxml_use_internal_errors(true); // Enable error handling
+                        
+                        // Wrap content in a container div if it doesn't have a root element
+                        // This prevents DOMDocument from adding unwanted HTML/HEAD/BODY tags
+                        $htmlToProcess = $processedHtml;
+                        if (!preg_match('/^<[a-z]+/i', trim($htmlToProcess))) {
+                            $htmlToProcess = '<div>' . $htmlToProcess . '</div>';
+                        }
+                        
+                        $dom->loadHTML(mb_convert_encoding($htmlToProcess, 'HTML-ENTITIES', 'UTF-8'), LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+                        libxml_clear_errors(); // Clear any HTML parsing warnings
+                        $images = $dom->getElementsByTagName('img');
+                        $imageIdsInContent = []; // Track image IDs present in the HTML content
+                        
+                        // Convert NodeList to array to avoid issues with DOM manipulation during iteration
+                        $imagesArray = [];
+                        foreach ($images as $img) {
+                            $imagesArray[] = $img;
+                        }
+                
+                        foreach ($imagesArray as $img) {
                     $src = $img->getAttribute('src');
                     $alt = $img->getAttribute('alt') ?? '';
                     
                     // Skip if already a placeholder
                     if (preg_match('/^\[IMAGE_ID:(\d+)\]$/', $src, $matches)) {
-                        // Image already exists, keep the placeholder
+                        // Image already exists, keep the placeholder and track the ID
+                        $imageIdsInContent[] = (int)$matches[1];
                         continue;
                     }
                     
@@ -8379,65 +8574,190 @@ class AdminController extends Controller
                         $imageType = $matches[1];
                         $imageData = base64_decode($matches[2]);
                         
-                        // Save base64 image to file
-                        $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $imageType;
+                        // Save base64 image to file - save to public/storage
+                        $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $imageType;
                         $imagePath = 'article_content_images/' . $imageName;
-                        Storage::disk('public')->put($imagePath, $imageData);
+                        $destinationPath = public_path('storage/article_content_images');
+                        if (!file_exists($destinationPath)) {
+                            mkdir($destinationPath, 0755, true);
+                        }
+                        file_put_contents(public_path('storage/' . $imagePath), $imageData);
+                        
+                        // Generate default alt text if missing
+                        if (empty($alt)) {
+                            $alt = 'Article image for ' . $article->article_title;
+                        }
                         
                         // Save to database
                         $contentImage = stp_article_content_image::create([
                             'article_id' => $article->id,
                             'image_path' => $imagePath,
-                            'image_order' => $imageOrder,
                             'image_alt' => $alt,
                             'data_status' => 1,
                             'created_by' => $authUser->id
                         ]);
                         
-                        // Replace base64 with placeholder
+                        // Replace base64 with placeholder and track the ID
                         $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
-                        $imageOrder++;
+                        $imageIdsInContent[] = $contentImage->id;
                     }
                     // Check if it's an external URL (download and save)
                     elseif (filter_var($src, FILTER_VALIDATE_URL) && !str_contains($src, Storage::disk('public')->url(''))) {
                         try {
-                            $imageData = file_get_contents($src);
-                            if ($imageData !== false) {
+                            // Use stream context with timeout to prevent hanging (5 second timeout)
+                            $context = stream_context_create([
+                                'http' => [
+                                    'timeout' => 5,
+                                    'user_agent' => 'Mozilla/5.0',
+                                    'follow_location' => true,
+                                    'max_redirects' => 3
+                                ]
+                            ]);
+                            
+                            $imageData = @file_get_contents($src, false, $context);
+                            if ($imageData !== false && strlen($imageData) > 0) {
                                 $imageInfo = @getimagesizefromstring($imageData);
                                 if ($imageInfo !== false) {
                                     $extension = image_type_to_extension($imageInfo[2], false);
-                                    $imageName = 'article_' . $article->id . '_' . time() . '_' . $imageOrder . '.' . $extension;
+                                    $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $extension;
                                     $imagePath = 'article_content_images/' . $imageName;
-                                    Storage::disk('public')->put($imagePath, $imageData);
+                                    $destinationPath = public_path('storage/article_content_images');
+                                    if (!file_exists($destinationPath)) {
+                                        mkdir($destinationPath, 0755, true);
+                                    }
+                                    file_put_contents(public_path('storage/' . $imagePath), $imageData);
+                                    
+                                    // Generate default alt text if missing
+                                    if (empty($alt)) {
+                                        $alt = 'Article image for ' . $article->article_title;
+                                    }
                                     
                                     $contentImage = stp_article_content_image::create([
                                         'article_id' => $article->id,
                                         'image_path' => $imagePath,
-                                        'image_order' => $imageOrder,
                                         'image_alt' => $alt,
                                         'data_status' => 1,
                                         'created_by' => $authUser->id
                                     ]);
                                     
                                     $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
-                                    $imageOrder++;
+                                    $imageIdsInContent[] = $contentImage->id;
                                 }
                             }
                         } catch (\Exception $e) {
-                            // If download fails, keep original URL
-                            Log::warning('Failed to download external image: ' . $src);
+                            // If download fails, keep original URL (don't process it)
+                            Log::warning('Failed to download external image: ' . $src . ' - ' . $e->getMessage());
+                            // Don't replace the URL, just keep it as-is in the content
                         }
                     }
                 }
                 
-                // Get processed HTML
-                $processedHtml = $dom->saveHTML();
-                
-                // Save processed HTML to file
-                $contentFileName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.html';
-                $contentPath = 'article_contents/' . $contentFileName;
-                Storage::disk('public')->put($contentPath, $processedHtml);
-                $contentFilePath = $contentPath;
+                        // Mark images that are NOT in the HTML content as deleted (data_status = 0)
+                        // Get all images for this article
+                        $allArticleImages = stp_article_content_image::where('article_id', $article->id)->get();
+                        
+                        foreach ($allArticleImages as $articleImage) {
+                            // If image ID is not in the content, mark it as deleted
+                            if (!in_array($articleImage->id, $imageIdsInContent)) {
+                                $articleImage->update([
+                                    'data_status' => 0,
+                                    'updated_by' => $authUser->id
+                                ]);
+                            } else {
+                                // If image is in content and was previously deleted, restore it
+                                if ($articleImage->data_status == 0) {
+                                    $articleImage->update([
+                                        'data_status' => 1,
+                                        'updated_by' => $authUser->id
+                                    ]);
+                                }
+                            }
+                        }
+                        
+                        // Remove image placeholders for images with data_status = 0
+                        // Get all images with status 0 for this article (after updating statuses)
+                        $deletedImages = stp_article_content_image::where('article_id', $article->id)
+                            ->where('data_status', 0)
+                            ->pluck('id')
+                            ->toArray();
+                        
+                        // Remove img tags that reference deleted images
+                        $imagesToRemove = [];
+                        $allImages = $dom->getElementsByTagName('img');
+                        // Convert to array to avoid issues during iteration
+                        $allImagesArray = [];
+                        foreach ($allImages as $img) {
+                            $allImagesArray[] = $img;
+                        }
+                        
+                        foreach ($allImagesArray as $img) {
+                            $src = $img->getAttribute('src');
+                            if (preg_match('/^\[IMAGE_ID:(\d+)\]$/', $src, $matches)) {
+                                $imageId = (int)$matches[1];
+                                if (in_array($imageId, $deletedImages)) {
+                                    $imagesToRemove[] = $img;
+                                }
+                            }
+                        }
+                        
+                        // Remove the img elements
+                        foreach ($imagesToRemove as $img) {
+                            if ($img->parentNode) {
+                                $img->parentNode->removeChild($img);
+                            }
+                        }
+                        
+                        // Get processed HTML
+                        $processedHtml = $dom->saveHTML();
+                        
+                        // Remove the wrapper div if we added one
+                        if (preg_match('/^<div>(.*)<\/div>$/s', $processedHtml, $matches)) {
+                            $processedHtml = $matches[1];
+                        }
+                        
+                        // Remove DOCTYPE and HTML tags if DOMDocument added them
+                        $processedHtml = preg_replace('/^<!DOCTYPE[^>]*>/i', '', $processedHtml);
+                        $processedHtml = preg_replace('/^<html[^>]*>/i', '', $processedHtml);
+                        $processedHtml = preg_replace('/<\/html>$/i', '', $processedHtml);
+                        $processedHtml = preg_replace('/^<head[^>]*>.*?<\/head>/is', '', $processedHtml);
+                        $processedHtml = preg_replace('/^<body[^>]*>/i', '', $processedHtml);
+                        $processedHtml = preg_replace('/<\/body>$/i', '', $processedHtml);
+                        $processedHtml = trim($processedHtml);
+                        
+                        // Save processed HTML to file - save to public/storage
+                        $contentFileName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.html';
+                        $contentPath = 'article_contents/' . $contentFileName;
+                        $destinationPath = public_path('storage/article_contents');
+                        if (!file_exists($destinationPath)) {
+                            mkdir($destinationPath, 0755, true);
+                        }
+                        
+                        // Ensure we can write to the file
+                        $fullPath = public_path('storage/' . $contentPath);
+                        $writeResult = @file_put_contents($fullPath, $processedHtml);
+                        if ($writeResult === false) {
+                            // Try to get more specific error information
+                            $error = error_get_last();
+                            throw new \Exception('Failed to write article content file: ' . ($error ? $error['message'] : 'Unknown error'));
+                        }
+                        $contentFilePath = $contentPath;
+                    } catch (\Exception $e) {
+                        // If HTML processing fails, save the original content as-is
+                        Log::error('Failed to process HTML content for article ' . $article->id . ': ' . $e->getMessage() . ' | Stack: ' . $e->getTraceAsString());
+                        $contentFileName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.html';
+                        $contentPath = 'article_contents/' . $contentFileName;
+                        $destinationPath = public_path('storage/article_contents');
+                        if (!file_exists($destinationPath)) {
+                            mkdir($destinationPath, 0755, true);
+                        }
+                        $writeResult = @file_put_contents(public_path('storage/' . $contentPath), $processedHtml);
+                        if ($writeResult === false) {
+                            // If even saving the original fails, throw the error
+                            throw new \Exception('Failed to save article content: ' . $e->getMessage());
+                        }
+                        $contentFilePath = $contentPath;
+                    }
+                }
             }
 
             // Prepare the update data
@@ -8458,41 +8778,38 @@ class AdminController extends Controller
             // Update the article
             $article->update($updateData);
 
-            // Handle deleted content images
+            // Handle deleted content images - set status to 0 instead of deleting
             if ($request->filled('deletedImageIds')) {
                 foreach ($request->deletedImageIds as $imageId) {
                     $contentImage = stp_article_content_image::find($imageId);
                     if ($contentImage && $contentImage->article_id == $article->id) {
-                        // Delete image file
-                        if (Storage::disk('public')->exists($contentImage->image_path)) {
-                            Storage::disk('public')->delete($contentImage->image_path);
-                        }
-                        // Delete record
-                        $contentImage->delete();
+                        // Set data_status to 0 instead of deleting
+                        $contentImage->update([
+                            'data_status' => 0,
+                            'updated_by' => $authUser->id
+                        ]);
                     }
                 }
             }
 
             // Handle new content images upload
             if ($request->hasFile('contentImages')) {
-                // Get current max order
-                $maxOrder = stp_article_content_image::where('article_id', $article->id)->max('image_order') ?? -1;
-                $imageOrder = $maxOrder + 1;
-                
                 $contentImages = $request->file('contentImages');
                 foreach ($contentImages as $image) {
-                    $imageName = time() . '_' . uniqid() . '_' . $imageOrder . '.' . $image->getClientOriginalExtension();
-                    $imagePath = $image->storeAs('article_content_images', $imageName, 'public');
+                    $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
+                    $destinationPath = public_path('storage/article_content_images');
+                    if (!file_exists($destinationPath)) {
+                        mkdir($destinationPath, 0755, true);
+                    }
+                    $image->move($destinationPath, $imageName);
+                    $imagePath = 'article_content_images/' . $imageName;
                     
                     stp_article_content_image::create([
                         'article_id' => $article->id,
                         'image_path' => $imagePath,
-                        'image_order' => $imageOrder,
                         'data_status' => 1,
                         'created_by' => $authUser->id
                     ]);
-                    
-                    $imageOrder++;
                 }
             }
 
@@ -8507,6 +8824,9 @@ class AdminController extends Controller
                 'errors' => $e->errors()
             ], 422);
         } catch (\Exception $e) {
+            // Log the full error for debugging
+            Log::error('Article edit failed: ' . $e->getMessage() . ' | File: ' . $e->getFile() . ' | Line: ' . $e->getLine() . ' | Stack: ' . $e->getTraceAsString());
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Internal Server Error',
@@ -8530,32 +8850,97 @@ class AdminController extends Controller
                 ], 404);
             }
 
+            // Generate URLs for files in public/storage
             $featuredImageUrl = null;
             if ($article->article_featured_image) {
-                $featuredImageUrl = Storage::disk('public')->url($article->article_featured_image);
+                $baseUrl = url('/');
+                $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
             }
 
-            // Read article content from file
+            // Read article content from file - from public/storage
             $articleContent = '';
-            if ($article->article_content && Storage::disk('public')->exists($article->article_content)) {
-                $articleContent = Storage::disk('public')->get($article->article_content);
+            if ($article->article_content && file_exists(public_path('storage/' . $article->article_content))) {
+                $articleContent = file_get_contents(public_path('storage/' . $article->article_content));
             }
 
-            // Get content images with URLs
-            $contentImages = $article->contentImages->map(function ($image) {
-                return [
-                    'id' => $image->id,
-                    'url' => Storage::disk('public')->url($image->image_path),
-                    'path' => $image->image_path,
-                    'order' => $image->image_order,
-                    'alt' => $image->image_alt ?? ''
-                ];
-            })->values();
+            // URL-decode the content to handle URL-encoded placeholders (e.g., %5BIMAGE_ID:16%5D -> [IMAGE_ID:16])
+            $articleContent = urldecode($articleContent);
+
+            // Get content images with URLs - from public/storage
+            // Load images separately to ensure they're loaded correctly
+            $contentImages = stp_article_content_image::where('article_id', $article->id)
+                ->where('data_status', 1)
+                ->orderBy('id')
+                ->get()
+                ->filter(function ($image) {
+                    return !empty($image->image_path);
+                })
+                ->map(function ($image) {
+                    $baseUrl = url('/');
+                    return [
+                        'id' => $image->id,
+                        'url' => rtrim($baseUrl, '/') . '/storage/' . ltrim($image->image_path, '/'),
+                        'path' => $image->image_path,
+                        'alt' => $image->image_alt ?? ''
+                    ];
+                })
+                ->values();
 
             // Replace image placeholders in HTML with actual image URLs
+            // Use a comprehensive approach: regex for img tags + string replace as fallback
             foreach ($contentImages as $image) {
                 $placeholder = '[IMAGE_ID:' . $image['id'] . ']';
-                $articleContent = str_replace($placeholder, $image['url'], $articleContent);
+                $imageUrl = $image['url'];
+                
+                // Also handle URL-encoded version of placeholder
+                $encodedPlaceholder = urlencode($placeholder);
+                
+                // Escape the placeholder for regex (brackets are special characters)
+                $escapedPlaceholder = preg_quote($placeholder, '/');
+                $escapedEncodedPlaceholder = preg_quote($encodedPlaceholder, '/');
+                
+                // Method 1: Replace in img src attributes with double quotes (most common)
+                // Handles: <img src="[IMAGE_ID:14]"> or <img ... src="[IMAGE_ID:14]">
+                // Also handles URL-encoded: <img src="%5BIMAGE_ID:14%5D">
+                $articleContent = preg_replace(
+                    '/(<img[^>]*\s+src=["])(' . $escapedPlaceholder . '|' . $escapedEncodedPlaceholder . ')(["][^>]*>)/i',
+                    '$1' . $imageUrl . '$3',
+                    $articleContent
+                );
+                
+                // Method 2: Replace in img src attributes with single quotes
+                // Handles: <img src='[IMAGE_ID:14]'> or <img ... src='[IMAGE_ID:14]'>
+                $articleContent = preg_replace(
+                    '/(<img[^>]*\s+src=[\'])(' . $escapedPlaceholder . '|' . $escapedEncodedPlaceholder . ')([\'][^>]*>)/i',
+                    '$1' . $imageUrl . '$3',
+                    $articleContent
+                );
+                
+                // Method 3: Replace in img src attributes without quotes (edge case)
+                // Handles: <img src=[IMAGE_ID:14]> or <img ... src=[IMAGE_ID:14]>
+                $articleContent = preg_replace(
+                    '/(<img[^>]*\s+src=)(' . $escapedPlaceholder . '|' . $escapedEncodedPlaceholder . ')([\s>])/i',
+                    '$1' . $imageUrl . '$3',
+                    $articleContent
+                );
+                
+                // Method 4: Replace anywhere in the content (catches any edge cases)
+                // This is the most reliable fallback - handles both encoded and non-encoded
+                $articleContent = str_replace($placeholder, $imageUrl, $articleContent);
+                $articleContent = str_replace($encodedPlaceholder, $imageUrl, $articleContent);
+            }
+            
+            // Remove any remaining placeholders for images with data_status = 0
+            // This handles cases where old HTML files might still have placeholders for deleted images
+            $deletedImageIds = stp_article_content_image::where('article_id', $article->id)
+                ->where('data_status', 0)
+                ->pluck('id')
+                ->toArray();
+            
+            foreach ($deletedImageIds as $deletedId) {
+                $placeholder = '[IMAGE_ID:' . $deletedId . ']';
+                // Remove img tags that contain the deleted image placeholder in src attribute
+                $articleContent = preg_replace('/<img[^>]*src=["\'][^"\']*' . preg_quote($placeholder, '/') . '[^"\']*["\'][^>]*>/i', '', $articleContent);
             }
 
             return response()->json([

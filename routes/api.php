@@ -70,6 +70,20 @@ Route::prefix('student')->group(function () {
 
     Route::post('/advertisementList', [studentController::class, 'advertisementList']);
     Route::post('/increaseNumberVisit', [studentController::class, 'increaseNumberVisit']);
+    Route::post('/increaseArticleVisit', [studentController::class, 'increaseArticleVisit']);
+
+    // Article Category Routes (Public)
+    Route::get('/articleCategoryList', [studentController::class, 'articleCategoryList']);
+    Route::get('/articleHeroList', [studentController::class, 'articleHeroList']);
+    Route::post('/firstThreeArticles', [studentController::class, 'firstThreeArticles']);
+    Route::get('/articleHeroAndFirstThree', [studentController::class, 'articleHeroAndFirstThree']);
+    Route::get('/latestArticles', [studentController::class, 'latestArticles']);
+    Route::get('/recentNewsArticles', [studentController::class, 'recentNewsArticles']);
+    Route::get('/trendingArticles', [studentController::class, 'trendingArticles']);
+    Route::post('/trendingArticlesByCategory', [studentController::class, 'trendingArticlesByCategory']);
+    Route::post('/featuredArticlesByCategory', [studentController::class, 'featuredArticlesByCategory']);
+    Route::post('/articleDetail', [studentController::class, 'articleDetail']);
+    Route::post('/articlesByCategory', [studentController::class, 'articlesByCategory']);
 
 
     //student portal
@@ -314,6 +328,7 @@ Route::prefix('admin')->middleware('auth:sanctum')->group(function () {
 
     //number of visit 
     Route::post('/totalNumberVisitSchoolList', [AdminController::class, 'totalNumberVisitSchoolList']);
+    Route::post('/adminArticleVisit', [AdminController::class, 'adminArticleVisit']);
 });
 
 Route::prefix('school')->middleware('auth:sanctum')->group(function () {

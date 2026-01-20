@@ -3,76 +3,294 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>New Applicant Received From StudyPal</title>
+    <title>New Applicant Received</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
         .button {
-    display: inline-block;
-    padding: 10px 20px;
-    font-size: 16px;
-    background-color: #4CAF50; /* Green background */
-    color: white !important; /* White text */
-    border: 1px solid #4CAF50; /* Match border color with background */
-    text-decoration: none;
-    border-radius: 5px;
-}
-        </style>
+            display: inline-block;
+            padding: 12px 24px;
+            font-size: 16px;
+            background-color: #B71A18;
+            color: white !important;
+            border: 1px solid #B71A18;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        /* Reused header styles */
+        .apply_course_header {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #f2f2f2;
+        }
+        .header_left, .header_right {
+            width: 50%;
+            vertical-align: middle;
+        }
+        .logo_img {
+            height: 40px;
+            width: auto;
+            display: block;
+        }
+        .tagline_text {
+            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-weight: bold;
+            font-size: 14px;
+            letter-spacing: 1px;
+            line-height: 1.4;
+            text-align: right;
+        }
+        .tagline_red { color: #B71A18; }
+        .tagline_black { color: #000000; }
+        /* Card + details styles (reused from applyCourseEmail) */
+        .details_card {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            border: none;
+        }
+        .details_title {
+            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-weight: 600;
+            font-size: 20px;
+            color: #000000;
+            margin: 0 0 4px 0;
+        }
+        .details_subtitle {
+            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-weight: 400;
+            font-size: 13px;
+            color: #6b6b6b;
+            margin: 0 0 16px 0;
+        }
+        .details_table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .details_table td {
+            padding: 10px 0;
+            border-bottom: 1px solid #f0f0f0;
+            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-size: 15px;
+            color: #000000;
+        }
+        .details_label {
+            color: #6b6b6b;
+            width: 40%;
+        }
+        /* Hero styles for school email */
+        .hero_outer_card {
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            overflow: hidden;
+        }
+        .hero_table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .hero_left {
+            width: 55%;
+            padding: 30px 30px 30px 30px;
+            background: linear-gradient(135deg, #C62828, #B71A18);
+        }
+        .hero_right {
+            width: 45%;
+            padding: 0;
+        }
+        .hero_image_wrapper {
+            width: 100%;
+            height: 100%;
+            background-image: url('https://backendstudypal.studypal.my/storage/assets/newApplicant.webp');
+            background-size: cover;
+            background-position: center;
+        }
+        .hero_title {
+            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-weight: 700;
+            font-size: 22px;
+            color: #ffffff;
+            margin: 0 0 12px 0;
+        }
+        .hero_text {
+            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-weight: 400;
+            font-size: 14px;
+            color: #ffffff;
+            margin: 0;
+            line-height: 1.6;
+        }
+    </style>
 </head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <table style="width: 100%; max-width: 600px; margin: 0 auto; border-collapse: collapse;">
+<body style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; line-height: 1.6; color: #000000; background-color: #f2f2f2; margin: 0; padding: 0;">
+    <table style="width: 100%; max-width: 600px; margin: 0 auto; border-collapse: collapse; background-color: #f2f2f2;">
+        <!-- Header Section: apply_course_header -->
         <tr>
-            <td style="padding: 20px; text-align: center; background-color: #f8f8f8;">
-                <h1 style="margin: 0; color: #333;">New Applicant Received From StudyPal</h1>
-            </td>
-        </tr>
-        <tr>
-            <td style="padding: 20px; background-color: #ffffff;">
-                <p>Dear {{ $institute_name }},</p>
-
-                <p>We are pleased to inform you that a new student has applied for the <strong>{{ $course_name }}</strong> at your esteemed institution through StudyPal. Below are the details of the applicant:</p>
-
-                <table style="width: 100%; border: 1px solid #dddddd; border-collapse: collapse;">
+            <td class="apply_course_header" style="background-color: #f2f2f2;">
+                <table style="width: 100%; border-collapse: collapse;">
                     <tr>
-                        <td style="padding: 10px; border: 1px solid #dddddd;"><strong>Applicant Name:</strong></td>
-                        <td style="padding: 10px; border: 1px solid #dddddd;">{{ $student_name }}</td>
-                    </tr>
-                    <tr>
-                        <td style="padding: 10px; border: 1px solid #dddddd;"><strong>Email Address:</strong></td>
-                        <td style="padding: 10px; border: 1px solid #dddddd;">{{ str_repeat('*', strlen($student_email) - strpos($student_email, '@')) . substr($student_email, strpos($student_email, '@')) }}</td>
-                    </tr>
-                    <tr>
-                        <td style="padding: 10px; border: 1px solid #dddddd;"><strong>Phone Number:</strong></td>
-                        <td style="padding: 10px; border: 1px solid #dddddd;"> {{ '+' . str_repeat('*', strlen($student_phone) - 5) . substr($student_phone, -5) }}</td>
-                    </tr>
-                    <tr>
-                        <td style="padding: 10px; border: 1px solid #dddddd;"><strong>Course Applied For:</strong></td>
-                        <td style="padding: 10px; border: 1px solid #dddddd;">{{ $course_name }}</td>
-                    </tr>
-                    <tr>
-                        <td style="padding: 10px; border: 1px solid #dddddd;"><strong>Application Date:</strong></td>
-                        <td style="padding: 10px; border: 1px solid #dddddd;">{{ $application_date }}</td>
+                        <!-- Left Container (50%): StudyPal Logo -->
+                        <td class="header_left" style="width: 50%; padding-bottom: 10px; vertical-align: middle;">
+                            <img src="https://backendstudypal.studypal.my/storage/assets/studypal.png" alt="StudyPal Logo" class="logo_img" style="height: 40px; width: auto; display: block;">
+                        </td>
+                        <!-- Right Container (50%): Tagline -->
+                        <td class="header_right" style="width: 50%; vertical-align: middle; text-align: right;">
+                            <div class="tagline_text" style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: bold; font-size: 14px; letter-spacing: 1px; line-height: 1.4; text-align: right;">
+                                <span class="tagline_red" style="color: #B71A18;">RECEIVE.</span>
+                                <span class="tagline_black" style="color: #000000;"> REVIEW.</span>
+                                <span class="tagline_red" style="color: #B71A18;"> RECRUIT.</span>
+                            </div>
+                        </td>
                     </tr>
                 </table>
-
-                <p>Please review the application at your earliest convenience. You can access the full application and any supporting documents through your StudyPal dashboard.</p>
-                <p>
-                    {{-- <a href="{{ $actionUrl }}" target="_blank" style="color: #4CAF50; text-decoration: none;">
-                        View Application Details
-                    </a> --}}
-                    <p><a href="{{ $actionUrl }}" class="button" target="_blank">View Application Details</a></p>
-
-                </p>
-
-                <p>If you have any questions or require further information, feel free to reach out to us.</p>
-
-                <p>Thank you for your continued partnership.</p>
-
-                <p>Best regards,<br/>
-                    StudyPal</p>
             </td>
         </tr>
+
+        <!-- Content Wrapper: Hero + Application Details + Bottom Instruction -->
         <tr>
-            <td style="padding: 20px; text-align: center; background-color: #f8f8f8;">
-                <p style="margin: 0;">&copy; {{ date('Y') }} StudyPal. All rights reserved.</p>
+            <td style="padding: 0 0 20px 0;">
+                <div style="background-color: #ffffff; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);">
+
+                    <!-- Hero / Title Section -->
+                    <div class="hero_outer_card" style="box-shadow: none; border-radius: 12px; margin-bottom: 24px;">
+                    <table class="hero_table">
+                        <tr>
+                            <!-- Left: Red overlay content -->
+                            <td class="hero_left" style="vertical-align: top;">
+                                <table style="width: 100%; border-collapse: collapse;">
+                                    <tr>
+                                        <td style="padding: 0;">
+                                            <p class="hero_title" style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 700; font-size: 22px; color: #ffffff; margin: 0 0 12px 0;">
+                                                New Applicant Received
+                                            </p>
+                                            <p class="hero_text" style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #ffffff; margin: 0 0 16px 0; line-height: 1.6;">
+                                                Dear {{ $institute_name }},
+                                            </p>
+                                            <p class="hero_text" style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #ffffff; margin: 0; line-height: 1.6;">
+                                                A new student has applied for one of your courses through our platform. Please review the application details below.
+                                            </p>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                            <!-- Right: Image -->
+                            <td class="hero_right" style="vertical-align: top;">
+                                <div class="hero_image_wrapper">
+                                    <!-- Decorative image container only -->
+                                    &nbsp;
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                    </div>
+
+                    <!-- Application Details (reused structure from applyCourseEmail) -->
+                    <div class="details_card" style="margin-bottom: 16px;">
+                    <h3 class="details_title">Applicant Details</h3>
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 0;">
+                        <tr>
+                            <td class="details_subtitle" style="text-align: left; padding: 0; border: none;">Applied on {{ $application_date }}</td>
+                            <td style="text-align: right; padding: 0; border: none;">
+                                <a href="{{ $actionUrl }}" class="button" target="_blank" style="padding: 6px 30px; font-size: 13px; border-radius: 50px; background-color: #B71A18; border: 1px solid #B71A18; color: #ffffff !important; text-decoration: none; display: inline-block; margin-top: 0;">
+                                    View Detailed Application
+                                </a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td colspan="2" style="padding: 10px 0 0 0; border-bottom: 1px solid #f0f0f0;"></td>
+                        </tr>
+                    </table>
+                    <table class="details_table">
+                        <tr>
+                            <td class="details_label" style="text-align: left;">Applicant Name</td>
+                            <td style="text-align: right; font-weight: 500;">{{ $student_name }}</td>
+                        </tr>
+                        <tr>
+                            <td class="details_label" style="text-align: left;">Email Address</td>
+                            <td style="text-align: right; font-weight: 500;">
+                                {{ str_repeat('*', strlen($student_email) - strpos($student_email, '@')) . substr($student_email, strpos($student_email, '@')) }}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="details_label" style="text-align: left;">Phone Number</td>
+                            <td style="text-align: right; font-weight: 500;">
+                                {{ '+' . str_repeat('*', strlen($student_phone) - 5) . substr($student_phone, -5) }}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="details_label" style="text-align: left;">Course Applied For</td>
+                            <td style="text-align: right; font-weight: 500;">{{ $course_name }}</td>
+                        </tr>
+                    </table>
+                    </div>
+
+                    <!-- Bottom Instruction Text -->
+                    <div style="padding: 0 4px 4px 4px;">
+                        <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 0 0 4px 0; text-align: left;">
+                            Please review the application at your earliest convenience.
+                        </p>
+                        <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 4px 0 0 0; text-align: left;">
+                            You can access the full application and any supporting documents through your
+                            <a href="{{ $actionUrl }}" style="color: #B71A18; text-decoration: underline;">Studypal Dashboard</a>.
+                        </p>
+                    </div>
+
+                </div>
+            </td>
+        </tr>
+
+        <!-- Email Footer Section (reused from welcomeEmail.blade.php) -->
+        <tr>
+            <td style="padding: 40px 20px 0 20px; background-color: #f2f2f2;"> 
+                <!-- Help Information -->
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+                    <tr>
+                        <td style="text-align: center; padding: 0;">
+                            <h3 style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 600; font-size: 18px; color: #000000; margin: 0 0 15px 0;">
+                                Need Help?
+                            </h3>
+                            <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 5px 0;">
+                                Email: <a href="mailto:imediamyy@gmail.com" style="color: #B71A18; text-decoration: underline;">imediamyy@gmail.com</a>
+                            </p>
+                            <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 5px 0;">
+                                Phone: <a href="tel:+60135538976" style="color: #636363; text-decoration: none;">+6013 5538976</a>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+                
+                <!-- Social Media Icons -->
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+                    <tr>
+                        <td style="text-align: center; padding: 0;">
+                            <a href="https://studypal.my" style="display: inline-block; margin: 0 15px; text-decoration: none;">
+                                <img src="https://backendstudypal.studypal.my/storage/assets/website.png" alt="Website" style="width: 32px; height: 32px; display: block;">
+                            </a>
+                            <a href="https://www.facebook.com/studypal.my" style="display: inline-block; margin: 0 15px; text-decoration: none;">
+                                <img src="https://backendstudypal.studypal.my/storage/assets/facebook.png" alt="Facebook" style="width: 32px; height: 32px; display: block;">
+                            </a>
+                            <a href="https://www.instagram.com/studypal.my?utm_source=ig_web_button_share_sheet&igsh=ZDNlZDc0MzIxNw==" style="display: inline-block; margin: 0 15px; text-decoration: none;">
+                                <img src="https://backendstudypal.studypal.my/storage/assets/instagram.png" alt="Instagram" style="width: 32px; height: 32px; display: block;">
+                            </a>
+                        </td>
+                    </tr>
+                </table>
+                
+                <!-- Footer Text -->
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr>
+                        <td style="text-align: center; padding: 20px;">
+                            <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 12px; color: #636363; margin: 5px 0;">
+                                © {{ date('Y') }} Studypal. All rights reserved.
+                            </p>
+                            <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 12px; color: #636363; margin: 5px 0;">
+                                Lot 3493, No. 13 2nd Floor, Jalan Piasau, Piasau Commercial, 98000 Miri, Sarawak
+                            </p>
+                        </td>
+                    </tr>
+                </table>
             </td>
         </tr>
     </table>

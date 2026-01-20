@@ -600,12 +600,12 @@ class studentController extends Controller
             ]);
 
             if (!empty($request->id)) {
-                $school = stp_school::find($request->id);
+                $school = stp_school::with('courses.featured')->find($request->id);
             } else {
                 $request->validate([
                     'schoolName' => 'required|string'
                 ]);
-                $school = stp_school::where('school_name', $request->schoolName)->get()->first();
+                $school = stp_school::with('courses.featured')->where('school_name', $request->schoolName)->get()->first();
             }
 
             $courses = $school->courses;
@@ -687,6 +687,15 @@ class studentController extends Controller
                         usort($monthList, function ($a, $b) use ($monthOrder) {
                             return $monthOrder[$a] - $monthOrder[$b];
                         });
+                        
+                        // Check if course is featured (featured_type = 30, active featured status)
+                        $isFeatured = $course->featured->contains(function ($featured) {
+                            return $featured->featured_type == 30 
+                                && $featured->featured_status == 1 
+                                && $featured->featured_startTime < now() 
+                                && $featured->featured_endTime > now();
+                        });
+                        
                         return [
                             'id' => $course->id,
                             'course_name' => $course->course_name,
@@ -697,7 +706,8 @@ class studentController extends Controller
                             'category' => $course->category->category_name,
                             'qualification' => $course->qualification->qualification_name,
                             'study_mode' => $course->studyMode->core_metaName ?? null,
-                            'course_logo' => $course->course_logo
+                            'course_logo' => $course->course_logo,
+                            'featured' => $isFeatured
                         ];
                     }
                     return null;

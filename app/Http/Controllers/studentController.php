@@ -552,6 +552,47 @@ class studentController extends Controller
 
 
 
+            // Free education schemes (school + course)
+            $schoolFreeEducationSchemes = stp_school_free_education::where('school_id', $courseList->school->id)
+                ->where('stp_school_free_education.data_status', 1)
+                ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->select(
+                    'stp_free_education.id',
+                    'stp_free_education.scheme_name',
+                    'stp_free_education.text_color_code',
+                    'stp_free_education.background_color_code',
+                    'stp_free_education.data_status'
+                )
+                ->get()
+                ->map(function ($scheme) {
+                    return [
+                        'id' => (int) $scheme->id,
+                        'scheme_name' => $scheme->scheme_name,
+                        'text_color_code' => $scheme->text_color_code,
+                        'background_color_code' => $scheme->background_color_code,
+                        'data_status' => (int) $scheme->data_status,
+                    ];
+                })
+                ->toArray();
+
+            $courseFreeEducationSchemes = stp_course_free_education::where('course_id', $courseList->id)
+                ->where('stp_course_free_education.data_status', 1)
+                ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->select(
+                    'stp_free_education.id',
+                    'stp_free_education.scheme_name',
+                    'stp_free_education.data_status'
+                )
+                ->get()
+                ->map(function ($scheme) {
+                    return [
+                        'id' => (int) $scheme->id,
+                        'scheme_name' => $scheme->scheme_name,
+                        'data_status' => (int) $scheme->data_status,
+                    ];
+                })
+                ->toArray();
+
             $courseListDetail = [
                 'id' => $courseList->id,
                 'course' => $courseList->course_name,
@@ -579,7 +620,9 @@ class studentController extends Controller
                 'logo' => $logo,
                 'coverPhoto' => $coverPhoto ?? null,
                 'schoolPhoto' => $schoolPhoto ?? null,
-                'tag' => $tagList
+                'tag' => $tagList,
+                'school_free_education_schemes' => $schoolFreeEducationSchemes,
+                'course_free_education_schemes' => $courseFreeEducationSchemes,
             ];
 
             return response()->json([
@@ -1289,6 +1332,8 @@ class studentController extends Controller
                 'gender' => $authUser->detail->studentGender->core_metaName ?? null,
                 'address' => $authUser->detail->student_detailAddress,
                 'country' => $authUser->detail->country->country_name ?? null,
+                // Explicitly return state_id for front-end badge/filter checks (e.g., Sarawak)
+                'state_id' => $authUser->detail->state_id ?? $authUser->detail->state->id ?? null,
                 'state' => $authUser->detail->state->state_name ?? null,
                 'city' => $authUser->detail->city->city_name ?? null,
                 'postcode' => $authUser->detail->student_detailPostcode,
@@ -3241,6 +3286,48 @@ class studentController extends Controller
                 ->map(function ($featured) {
                     $course = $featured->courses;
                     $intakeMonths = $course->intake->pluck('month.core_metaName')->toArray();
+
+                    // Get school free education schemes
+                    $schoolFreeEducationSchemes = stp_school_free_education::where('school_id', $course->school->id)
+                        ->where('stp_school_free_education.data_status', 1)
+                        ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                        ->select(
+                            'stp_free_education.id',
+                            'stp_free_education.scheme_name',
+                            'stp_free_education.text_color_code',
+                            'stp_free_education.background_color_code',
+                            'stp_free_education.data_status'
+                        )
+                        ->get()
+                        ->map(function ($scheme) {
+                            return [
+                                'id' => (int) $scheme->id,
+                                'scheme_name' => $scheme->scheme_name,
+                                'text_color_code' => $scheme->text_color_code,
+                                'background_color_code' => $scheme->background_color_code,
+                                'data_status' => (int) $scheme->data_status,
+                            ];
+                        })
+                        ->toArray();
+
+                    // Get course free education schemes
+                    $courseFreeEducationSchemes = stp_course_free_education::where('course_id', $course->id)
+                        ->where('stp_course_free_education.data_status', 1)
+                        ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
+                        ->select(
+                            'stp_free_education.id',
+                            'stp_free_education.scheme_name',
+                            'stp_free_education.data_status'
+                        )
+                        ->get()
+                        ->map(function ($scheme) {
+                            return [
+                                'id' => (int) $scheme->id,
+                                'scheme_name' => $scheme->scheme_name,
+                                'data_status' => (int) $scheme->data_status,
+                            ];
+                        })
+                        ->toArray();
                     
                     return [
                         'id' => $course->id,
@@ -3264,6 +3351,8 @@ class studentController extends Controller
                         'international_cost' => number_format($course->international_cost),
                         'affiliating_university' => $course->school->school_name,
                         'featured' => true, // All courses from featuredCourseList are featured
+                        'school_free_education_schemes' => $schoolFreeEducationSchemes,
+                        'course_free_education_schemes' => $courseFreeEducationSchemes,
                     ];
                 })
                 ->unique('course_id');
@@ -3303,12 +3392,54 @@ class studentController extends Controller
                 ->get()
                 ->map(function ($course) {
                     $intakeMonths = $course->intake->where('intake_status', 1)->pluck('month.core_metaName')->toArray();
-                    
+
                     // Check if course is featured (featured_type 30 for course listing page)
                     $featured = $course->featured->contains(function ($item) {
                         return $item->featured_type == 30 && $item->featured_status == 1 && $item->featured_startTime < now() && $item->featured_endTime > now();
                     });
-                    
+
+                    // Get school free education schemes
+                    $schoolFreeEducationSchemes = stp_school_free_education::where('school_id', $course->school->id)
+                        ->where('stp_school_free_education.data_status', 1)
+                        ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                        ->select(
+                            'stp_free_education.id',
+                            'stp_free_education.scheme_name',
+                            'stp_free_education.text_color_code',
+                            'stp_free_education.background_color_code',
+                            'stp_free_education.data_status'
+                        )
+                        ->get()
+                        ->map(function ($scheme) {
+                            return [
+                                'id' => (int) $scheme->id,
+                                'scheme_name' => $scheme->scheme_name,
+                                'text_color_code' => $scheme->text_color_code,
+                                'background_color_code' => $scheme->background_color_code,
+                                'data_status' => (int) $scheme->data_status,
+                            ];
+                        })
+                        ->toArray();
+
+                    // Get course free education schemes
+                    $courseFreeEducationSchemes = stp_course_free_education::where('course_id', $course->id)
+                        ->where('stp_course_free_education.data_status', 1)
+                        ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
+                        ->select(
+                            'stp_free_education.id',
+                            'stp_free_education.scheme_name',
+                            'stp_free_education.data_status'
+                        )
+                        ->get()
+                        ->map(function ($scheme) {
+                            return [
+                                'id' => (int) $scheme->id,
+                                'scheme_name' => $scheme->scheme_name,
+                                'data_status' => (int) $scheme->data_status,
+                            ];
+                        })
+                        ->toArray();
+
                     return [
                         'id' => $course->id,
                         'course_id' => $course->id,
@@ -3331,6 +3462,8 @@ class studentController extends Controller
                         'international_cost' => number_format($course->international_cost),
                         'affiliating_university' => $course->school->school_name,
                         'featured' => $featured,
+                        'school_free_education_schemes' => $schoolFreeEducationSchemes,
+                        'course_free_education_schemes' => $courseFreeEducationSchemes,
                     ];
                 });
 
@@ -3369,12 +3502,54 @@ class studentController extends Controller
                 ->get()
                 ->map(function ($course) {
                     $intakeMonths = $course->intake->where('intake_status', 1)->pluck('month.core_metaName')->toArray();
-                    
+
                     // Check if course is featured (featured_type 30 for course listing page)
                     $featured = $course->featured->contains(function ($item) {
                         return $item->featured_type == 30 && $item->featured_status == 1 && $item->featured_startTime < now() && $item->featured_endTime > now();
                     });
-                    
+
+                    // Get school free education schemes
+                    $schoolFreeEducationSchemes = stp_school_free_education::where('school_id', $course->school->id)
+                        ->where('stp_school_free_education.data_status', 1)
+                        ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                        ->select(
+                            'stp_free_education.id',
+                            'stp_free_education.scheme_name',
+                            'stp_free_education.text_color_code',
+                            'stp_free_education.background_color_code',
+                            'stp_free_education.data_status'
+                        )
+                        ->get()
+                        ->map(function ($scheme) {
+                            return [
+                                'id' => (int) $scheme->id,
+                                'scheme_name' => $scheme->scheme_name,
+                                'text_color_code' => $scheme->text_color_code,
+                                'background_color_code' => $scheme->background_color_code,
+                                'data_status' => (int) $scheme->data_status,
+                            ];
+                        })
+                        ->toArray();
+
+                    // Get course free education schemes
+                    $courseFreeEducationSchemes = stp_course_free_education::where('course_id', $course->id)
+                        ->where('stp_course_free_education.data_status', 1)
+                        ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
+                        ->select(
+                            'stp_free_education.id',
+                            'stp_free_education.scheme_name',
+                            'stp_free_education.data_status'
+                        )
+                        ->get()
+                        ->map(function ($scheme) {
+                            return [
+                                'id' => (int) $scheme->id,
+                                'scheme_name' => $scheme->scheme_name,
+                                'data_status' => (int) $scheme->data_status,
+                            ];
+                        })
+                        ->toArray();
+
                     return [
                         'id' => $course->id,
                         'course_id' => $course->id,
@@ -3397,6 +3572,8 @@ class studentController extends Controller
                         'international_cost' => number_format($course->international_cost),
                         'affiliating_university' => $course->school->school_name,
                         'featured' => $featured,
+                        'school_free_education_schemes' => $schoolFreeEducationSchemes,
+                        'course_free_education_schemes' => $courseFreeEducationSchemes,
                     ];
                 });
 

@@ -85,6 +85,15 @@ Route::prefix('student')->group(function () {
     Route::post('/articleDetail', [studentController::class, 'articleDetail']);
     Route::post('/articlesByCategory', [studentController::class, 'articlesByCategory']);
 
+    // Article Comment Routes (Public for viewing, Auth required for creating/updating/deleting)
+    Route::post('/getArticleComments', [studentController::class, 'getArticleComments']);
+    Route::post('/createArticleComment', [studentController::class, 'createArticleComment'])->middleware('auth:sanctum');
+    Route::post('/updateArticleComment', [studentController::class, 'updateArticleComment'])->middleware('auth:sanctum');
+    Route::post('/deleteArticleComment', [studentController::class, 'deleteArticleComment'])->middleware('auth:sanctum');
+    
+    // Debug endpoint to check database and table
+    Route::middleware('auth:sanctum')->get('/debugArticleComments', [studentController::class, 'debugArticleComments']);
+
 
     //student portal
     Route::middleware('auth:sanctum')->post('/checkTermsAgreement', [studentController::class, 'checkTermsAgreement']);

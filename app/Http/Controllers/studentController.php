@@ -39,6 +39,7 @@ use App\Models\stp_riasecResultImage;
 use App\Models\stp_article_category;
 use App\Models\stp_article;
 use App\Models\stp_article_content_image;
+use App\Models\stp_article_comment;
 
 use App\Models\stp_totalNumberVisit;
 use App\Models\stp_article_visit;
@@ -4855,6 +4856,519 @@ class studentController extends Controller
                     'content_images' => $contentImages
                 ]
             ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get all comments for an article with 3-level nesting
+     */
+    public function getArticleComments(Request $request)
+    {
+        try {
+            $request->validate([
+                'article_id' => 'required|integer'
+            ]);
+
+            // Get all active comments for the article
+            $comments = stp_article_comment::where('article_id', $request->article_id)
+                ->where('data_status', 1)
+                ->with(['student.detail', 'replyTo.student.detail', 'replyTo'])
+                ->orderBy('created_at', 'asc')
+                ->get();
+
+            // Build nested structure
+            $commentMap = [];
+            $rootComments = [];
+
+            // First pass: create map of all comments
+            foreach ($comments as $comment) {
+                $commentData = [
+                    'id' => $comment->id,
+                    'article_id' => $comment->article_id,
+                    'student_id' => $comment->student_id,
+                    'author_name' => $comment->student ? 
+                        (($comment->student->detail->student_detailFirstName ?? '') . ' ' . 
+                        ($comment->student->detail->student_detailLastName ?? '')) : 
+                        ($comment->author_name ?? 'Anonymous'),
+                    'profile_picture' => null, // Can be added if student model has profile pic
+                    'parent_id' => $comment->parent_id,
+                    'reply_to_id' => $comment->reply_to_id,
+                    'comment_level' => $comment->comment_level,
+                    'comment_text' => $comment->comment_text,
+                    'reply_to_author' => null,
+                    'replies' => [],
+                    'created_at' => $comment->created_at->toISOString(),
+                    'created_at_human' => $comment->created_at->diffForHumans(),
+                ];
+
+                // Get reply-to author info if exists
+                if ($comment->reply_to_id && $comment->replyTo) {
+                    $replyToComment = $comment->replyTo;
+                    $commentData['reply_to_author'] = $replyToComment->student ? 
+                        (($replyToComment->student->detail->student_detailFirstName ?? '') . ' ' . 
+                        ($replyToComment->student->detail->student_detailLastName ?? '')) : 
+                        ($replyToComment->author_name ?? 'Anonymous');
+                } elseif ($comment->comment_level == 3 && $comment->reply_to_id === null && $comment->parent_id) {
+                    // Level 3 comment with removed reply_to - default to Level 2 parent
+                    $parent = $comments->firstWhere('id', $comment->parent_id);
+                    if ($parent && $parent->comment_level == 2) {
+                        $commentData['reply_to_author'] = $parent->student ? 
+                            (trim(($parent->student->detail->student_detailFirstName ?? '') . ' ' . 
+                            ($parent->student->detail->student_detailLastName ?? '')) ?: 'Anonymous') : 
+                            ($parent->author_name ?? 'Anonymous');
+                    }
+                }
+
+                $commentMap[$comment->id] = $commentData;
+            }
+
+            // Second pass: build nested structure
+            foreach ($commentMap as $id => $commentData) {
+                if ($commentData['parent_id'] === null) {
+                    // Root comment (Level 1)
+                    $rootComments[] = &$commentMap[$id];
+                } else {
+                    // Child comment - add to parent's replies
+                    if (isset($commentMap[$commentData['parent_id']])) {
+                        $commentMap[$commentData['parent_id']]['replies'][] = &$commentMap[$id];
+                    }
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $rootComments
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Create a new comment or reply
+     */
+    public function createArticleComment(Request $request)
+    {
+        Log::info('=== CREATE COMMENT REQUEST START ===');
+        Log::info('Request data: ', $request->all());
+        Log::info('Auth header: ', ['authorization' => $request->header('Authorization')]);
+        
+        try {
+            // Check authentication first
+            $authUser = Auth::guard('sanctum')->user();
+            Log::info('Auth user: ', $authUser ? ['id' => $authUser->id] : 'null');
+            
+            if (!$authUser) {
+                Log::warning('Unauthenticated request to createArticleComment');
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated. Please login to post a comment.',
+                    'debug' => 'No authenticated user found'
+                ], 401);
+            }
+
+            $request->validate([
+                'article_id' => 'required|integer',
+                'comment_text' => 'required|string|max:5000',
+                'parent_id' => 'nullable|integer|exists:stp_article_comments,id',
+                'reply_to_id' => 'nullable|integer|exists:stp_article_comments,id',
+                'author_name' => 'nullable|string|max:255' // For anonymous comments
+            ]);
+            
+            Log::info('Validation passed');
+            
+            // Check if article exists
+            $article = stp_article::where('id', $request->article_id)
+                ->where('data_status', 1)
+                ->first();
+
+            if (!$article) {
+                Log::warning('Article not found: ' . $request->article_id);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article not found',
+                    'debug' => 'Article ID: ' . $request->article_id . ' not found or inactive'
+                ], 404);
+            }
+            
+            Log::info('Article found: ' . $article->id);
+
+            $commentLevel = 1;
+            $parentId = null;
+            $replyToId = $request->reply_to_id;
+
+            // Determine comment level and parent
+            if ($request->parent_id) {
+                $parentComment = stp_article_comment::where('id', $request->parent_id)
+                    ->where('article_id', $request->article_id)
+                    ->where('data_status', 1)
+                    ->first();
+
+                if (!$parentComment) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Parent comment not found'
+                    ], 404);
+                }
+
+                $parentId = $parentComment->id;
+                $parentLevel = $parentComment->comment_level;
+
+                // Calculate new comment level
+                if ($parentLevel == 1) {
+                    $commentLevel = 2;
+                } elseif ($parentLevel == 2) {
+                    $commentLevel = 3;
+                } elseif ($parentLevel == 3) {
+                    // Level 3 can reply to Level 3, but stays at Level 3
+                    $commentLevel = 3;
+                    // Update parent_id to point to the Level 2 ancestor if replying to Level 3
+                    $level2Parent = $parentComment;
+                    while ($level2Parent->parent_id && $level2Parent->comment_level != 2) {
+                        $level2Parent = stp_article_comment::find($level2Parent->parent_id);
+                        if (!$level2Parent) break;
+                    }
+                    if ($level2Parent && $level2Parent->comment_level == 2) {
+                        $parentId = $level2Parent->id;
+                    }
+                }
+            }
+
+            // Validate reply_to_id if provided
+            if ($replyToId) {
+                $replyToComment = stp_article_comment::where('id', $replyToId)
+                    ->where('article_id', $request->article_id)
+                    ->where('data_status', 1)
+                    ->first();
+
+                if (!$replyToComment) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Reply-to comment not found'
+                    ], 404);
+                }
+
+                // For Level 3 comments, reply_to_id can be null even if we're replying to another Level 3
+                // This is handled in the UI by showing the Level 2 parent as reply target
+            }
+
+            // Check if table exists (debug)
+            try {
+                $tableExists = \DB::select("SHOW TABLES LIKE 'stp_article_comments'");
+                Log::info('Table check: ', ['exists' => !empty($tableExists)]);
+            } catch (\Exception $e) {
+                Log::error('Error checking table: ' . $e->getMessage());
+            }
+
+            // Create comment
+            Log::info('Attempting to create comment with data: ', [
+                'article_id' => $request->article_id,
+                'student_id' => $authUser->id,
+                'parent_id' => $parentId,
+                'reply_to_id' => $replyToId,
+                'comment_level' => $commentLevel,
+                'comment_text_length' => strlen($request->comment_text),
+            ]);
+            
+            $comment = stp_article_comment::create([
+                'article_id' => $request->article_id,
+                'student_id' => $authUser->id,
+                'parent_id' => $parentId,
+                'reply_to_id' => $replyToId,
+                'comment_level' => $commentLevel,
+                'comment_text' => $request->comment_text,
+                'author_name' => null, // Always null for authenticated users
+                'data_status' => 1,
+                'created_by' => $authUser->id,
+            ]);
+            
+            Log::info('Comment created successfully: ' . $comment->id);
+
+            // Load relationships for response
+            $comment->load(['student.detail', 'replyTo.student.detail']);
+
+            $responseData = [
+                'id' => $comment->id,
+                'article_id' => $comment->article_id,
+                'student_id' => $comment->student_id,
+                'author_name' => $comment->student ? 
+                    (trim(($comment->student->detail->student_detailFirstName ?? '') . ' ' . 
+                    ($comment->student->detail->student_detailLastName ?? '')) ?: 'Anonymous') : 
+                    ($comment->author_name ?? 'Anonymous'),
+                'profile_picture' => null,
+                'parent_id' => $comment->parent_id,
+                'reply_to_id' => $comment->reply_to_id,
+                'comment_level' => $comment->comment_level,
+                'comment_text' => $comment->comment_text,
+                'reply_to_author' => null,
+                'replies' => [],
+                'created_at' => $comment->created_at->toISOString(),
+                'created_at_human' => $comment->created_at->diffForHumans(),
+            ];
+
+            // Get reply-to author if exists
+            if ($comment->reply_to_id && $comment->replyTo) {
+                $replyToComment = $comment->replyTo;
+                $responseData['reply_to_author'] = $replyToComment->student ? 
+                    (trim(($replyToComment->student->detail->student_detailFirstName ?? '') . ' ' . 
+                    ($replyToComment->student->detail->student_detailLastName ?? '')) ?: 'Anonymous') : 
+                    ($replyToComment->author_name ?? 'Anonymous');
+            } elseif ($comment->comment_level == 3 && $comment->reply_to_id === null && $comment->parent_id) {
+                // Level 3 with removed reply_to - default to Level 2 parent
+                $parent = stp_article_comment::find($comment->parent_id);
+                if ($parent && $parent->comment_level == 2) {
+                    $responseData['reply_to_author'] = $parent->student ? 
+                        (($parent->student->detail->student_detailFirstName ?? '') . ' ' . 
+                        ($parent->student->detail->student_detailLastName ?? '')) : 
+                        ($parent->author_name ?? 'Anonymous');
+                }
+            }
+
+            Log::info('Returning success response');
+            return response()->json([
+                'success' => true,
+                'message' => 'Comment created successfully',
+                'data' => $responseData
+            ], 201);
+        } catch (ValidationException $e) {
+            Log::error('Validation failed: ', $e->errors());
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $e->errors(),
+                'debug' => 'ValidationException caught'
+            ], 422);
+        } catch (\Exception $e) {
+            Log::error('Exception in createArticleComment: ', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage(),
+                'debug' => [
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                ]
+            ], 500);
+        } finally {
+            Log::info('=== CREATE COMMENT REQUEST END ===');
+        }
+    }
+
+    /**
+     * Debug endpoint to check database and table
+     */
+    public function debugArticleComments(Request $request)
+    {
+        try {
+            $authUser = Auth::guard('sanctum')->user();
+            
+            $results = [
+                'authenticated' => $authUser ? true : false,
+                'user_id' => $authUser ? $authUser->id : null,
+                'database' => config('database.connections.mysql.database'),
+                'table_exists' => false,
+                'table_structure' => null,
+                'sample_data' => null,
+                'errors' => []
+            ];
+
+            // Check if table exists
+            try {
+                $tables = DB::select("SHOW TABLES LIKE 'stp_article_comments'");
+                $results['table_exists'] = !empty($tables);
+                
+                if ($results['table_exists']) {
+                    // Get table structure
+                    $structure = DB::select("DESCRIBE stp_article_comments");
+                    $results['table_structure'] = $structure;
+                    
+                    // Get sample data
+                    $sample = stp_article_comment::limit(5)->get();
+                    $results['sample_data'] = $sample;
+                }
+            } catch (\Exception $e) {
+                $results['errors'][] = 'Table check error: ' . $e->getMessage();
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $results
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Debug error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Update a comment (especially for removing reply_to_id)
+     */
+    public function updateArticleComment(Request $request)
+    {
+        try {
+            $request->validate([
+                'comment_id' => 'required|integer|exists:stp_article_comments,id',
+                'comment_text' => 'nullable|string|max:5000',
+                'reply_to_id' => 'nullable|integer|exists:stp_article_comments,id' // Set to null to remove reply tag
+            ]);
+
+            $authUser = Auth::guard('sanctum')->user();
+            
+            $comment = stp_article_comment::where('id', $request->comment_id)
+                ->where('data_status', 1)
+                ->first();
+
+            if (!$comment) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Comment not found'
+                ], 404);
+            }
+
+            // Check if user owns the comment (or is admin)
+            if ($comment->student_id && $comment->student_id != $authUser->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized to update this comment'
+                ], 403);
+            }
+
+            // Update fields
+            if ($request->has('comment_text')) {
+                $comment->comment_text = $request->comment_text;
+            }
+
+            if ($request->has('reply_to_id')) {
+                // Can set to null to remove reply tag, or set to a valid comment ID
+                $comment->reply_to_id = $request->reply_to_id;
+            }
+
+            $comment->updated_by = $authUser ? $authUser->id : null;
+            $comment->save();
+
+            // Load relationships
+            $comment->load(['student.detail', 'replyTo.student.detail']);
+
+            $responseData = [
+                'id' => $comment->id,
+                'article_id' => $comment->article_id,
+                'student_id' => $comment->student_id,
+                'author_name' => $comment->student ? 
+                    (trim(($comment->student->detail->student_detailFirstName ?? '') . ' ' . 
+                    ($comment->student->detail->student_detailLastName ?? '')) ?: 'Anonymous') : 
+                    ($comment->author_name ?? 'Anonymous'),
+                'profile_picture' => null,
+                'parent_id' => $comment->parent_id,
+                'reply_to_id' => $comment->reply_to_id,
+                'comment_level' => $comment->comment_level,
+                'comment_text' => $comment->comment_text,
+                'reply_to_author' => null,
+                'created_at' => $comment->created_at->toISOString(),
+                'created_at_human' => $comment->created_at->diffForHumans(),
+            ];
+
+            // Get reply-to author if exists, or default to Level 2 parent for Level 3
+            if ($comment->reply_to_id && $comment->replyTo) {
+                $replyToComment = $comment->replyTo;
+                $responseData['reply_to_author'] = $replyToComment->student ? 
+                    ($replyToComment->student->student_detail->student_detailFirstName ?? 'Anonymous') . ' ' . 
+                    ($replyToComment->student->student_detail->student_detailLastName ?? '') : 
+                    ($replyToComment->author_name ?? 'Anonymous');
+            } elseif ($comment->comment_level == 3 && $comment->reply_to_id === null && $comment->parent_id) {
+                // Level 3 with removed reply_to - default to Level 2 parent for display
+                $parent = stp_article_comment::find($comment->parent_id);
+                if ($parent && $parent->comment_level == 2) {
+                    $responseData['reply_to_author'] = $parent->student ? 
+                        (($parent->student->detail->student_detailFirstName ?? '') . ' ' . 
+                        ($parent->student->detail->student_detailLastName ?? '')) : 
+                        ($parent->author_name ?? 'Anonymous');
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Comment updated successfully',
+                'data' => $responseData
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Delete (soft delete) a comment
+     */
+    public function deleteArticleComment(Request $request)
+    {
+        try {
+            $request->validate([
+                'comment_id' => 'required|integer|exists:stp_article_comments,id'
+            ]);
+
+            $authUser = Auth::guard('sanctum')->user();
+            
+            $comment = stp_article_comment::where('id', $request->comment_id)
+                ->where('data_status', 1)
+                ->first();
+
+            if (!$comment) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Comment not found'
+                ], 404);
+            }
+
+            // Check if user owns the comment (or is admin)
+            if ($comment->student_id && $comment->student_id != $authUser->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized to delete this comment'
+                ], 403);
+            }
+
+            // Soft delete
+            $comment->data_status = 0;
+            $comment->updated_by = $authUser ? $authUser->id : null;
+            $comment->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Comment deleted successfully'
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $e->errors()
+            ], 422);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,

@@ -42,7 +42,9 @@ use App\Models\stp_article_visit;
 use Exception;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
-use Intervention\Image\Facades\Image as Image;
+use Intervention\Image\ImageManager;
+use Intervention\Image\Drivers\Gd\Driver as GdDriver;
+use Intervention\Image\Drivers\Imagick\Driver as ImagickDriver;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Log;
@@ -64,6 +66,139 @@ class AdminController extends Controller
     public function __construct(ServiceFunction $serviceFunction)
     {
         $this->serviceFunction = $serviceFunction;
+    }
+
+    /**
+     * Convert image to WebP format
+     * 
+     * @param string|object $imageSource - File path, uploaded file, or binary image data
+     * @param string $destinationPath - Full path to destination directory
+     * @param string $imageName - Base name for the image (without extension)
+     * @return array - ['path' => relative path, 'fullPath' => full file path, 'success' => bool]
+     */
+    private function convertImageToWebP($imageSource, $destinationPath, $imageName)
+    {
+        try {
+            // Ensure destination directory exists
+            if (!file_exists($destinationPath)) {
+                mkdir($destinationPath, 0755, true);
+            }
+
+            // Determine image source type and get temp path
+            $tempPath = null;
+            $originalExtension = null;
+
+            if (is_string($imageSource) && file_exists($imageSource)) {
+                // File path
+                $tempPath = $imageSource;
+                $originalExtension = strtolower(pathinfo($imageSource, PATHINFO_EXTENSION));
+            } elseif (is_object($imageSource) && method_exists($imageSource, 'getRealPath')) {
+                // Uploaded file
+                $tempPath = $imageSource->getRealPath();
+                $originalExtension = strtolower($imageSource->getClientOriginalExtension());
+            } elseif (is_string($imageSource)) {
+                // Binary image data
+                $tempPath = tempnam(sys_get_temp_dir(), 'img_');
+                file_put_contents($tempPath, $imageSource);
+                $imageInfo = @getimagesizefromstring($imageSource);
+                if ($imageInfo !== false) {
+                    $originalExtension = image_type_to_extension($imageInfo[2], false);
+                } else {
+                    $originalExtension = 'png'; // Default fallback
+                }
+            } else {
+                throw new \Exception('Invalid image source');
+            }
+
+            // SVG files cannot be converted to WebP, keep as SVG
+            if ($originalExtension === 'svg') {
+                $finalPath = $destinationPath . '/' . $imageName . '.svg';
+                if (is_string($imageSource) && file_exists($imageSource)) {
+                    copy($imageSource, $finalPath);
+                } elseif (is_object($imageSource) && method_exists($imageSource, 'move')) {
+                    $imageSource->move($destinationPath, $imageName . '.svg');
+                } else {
+                    file_put_contents($finalPath, $imageSource);
+                }
+                $relativePath = str_replace(public_path('storage/'), '', $destinationPath) . '/' . $imageName . '.svg';
+                return [
+                    'path' => $relativePath,
+                    'fullPath' => $finalPath,
+                    'success' => true
+                ];
+            }
+
+            // Check if GD or Imagick extension is available
+            $gdLoaded = extension_loaded('gd');
+            $imagickLoaded = extension_loaded('imagick');
+
+            if (!$gdLoaded && !$imagickLoaded) {
+                throw new \Exception('GD or Imagick extension is required for image processing');
+            }
+
+            // Check if WebP is supported by GD
+            if ($gdLoaded) {
+                $gdInfo = gd_info();
+                if (!isset($gdInfo['WebP Support']) || !$gdInfo['WebP Support']) {
+                    throw new \Exception('WebP is not supported by GD extension');
+                }
+            }
+
+            // Create ImageManager instance for Intervention Image v3
+            $driver = $gdLoaded ? new GdDriver() : new ImagickDriver();
+            $manager = new ImageManager($driver);
+            $img = $manager->read($tempPath);
+            
+            $webpPath = $destinationPath . '/' . $imageName . '.webp';
+            
+            // Convert to WebP format using toWebp() method (Intervention Image v3)
+            $img->toWebp(90)->save($webpPath);
+            
+            // Verify WebP file was created
+            if (!file_exists($webpPath)) {
+                throw new \Exception('WebP file was not created');
+            }
+
+            // Clean up temp file if we created one
+            if (is_string($imageSource) && !file_exists($imageSource) && file_exists($tempPath)) {
+                @unlink($tempPath);
+            }
+
+            $relativePath = str_replace(public_path('storage/'), '', $destinationPath) . '/' . $imageName . '.webp';
+            return [
+                'path' => $relativePath,
+                'fullPath' => $webpPath,
+                'success' => true
+            ];
+
+        } catch (\Exception $e) {
+            // Log the error for debugging
+            Log::error('WebP conversion failed for article image: ' . $e->getMessage());
+            
+            // Fallback: save original format
+            try {
+                $fallbackExtension = $originalExtension ?? 'png';
+                $fallbackPath = $destinationPath . '/' . $imageName . '.' . $fallbackExtension;
+                
+                if (is_string($imageSource) && file_exists($imageSource)) {
+                    copy($imageSource, $fallbackPath);
+                } elseif (is_object($imageSource) && method_exists($imageSource, 'move')) {
+                    $imageSource->move($destinationPath, $imageName . '.' . $fallbackExtension);
+                } else {
+                    file_put_contents($fallbackPath, $imageSource);
+                }
+
+                $relativePath = str_replace(public_path('storage/'), '', $destinationPath) . '/' . $imageName . '.' . $fallbackExtension;
+                return [
+                    'path' => $relativePath,
+                    'fullPath' => $fallbackPath,
+                    'success' => false
+                ];
+            } catch (\Exception $fallbackError) {
+                Log::error('Fallback image save also failed: ' . $fallbackError->getMessage());
+                throw $e; // Re-throw original error
+            }
+        }
     }
 
     public function addStudent(Request $request)
@@ -5157,6 +5292,11 @@ class AdminController extends Controller
             // Base query with relation for featured meta
             $query = stp_advertisement_banner::with(['banner']);
 
+            // Filter by ID if provided (for edit banner page)
+            if ($request->filled('id')) {
+                $query->where('id', $request->id);
+            }
+
             // Filter by search term if provided
             if ($request->filled('search')) {
                 $query->where('banner_name', 'like', '%' . $request->search . '%');
@@ -5311,8 +5451,77 @@ class AdminController extends Controller
             // Handle the banner file upload
             if ($request->hasFile('banner_file')) {
                 $image = $request->file('banner_file');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
+                $originalExtension = strtolower($image->getClientOriginalExtension());
+                $bannerDir = public_path('storage/bannerFile');
+                
+                if (!file_exists($bannerDir)) {
+                    mkdir($bannerDir, 0755, true);
+                }
+                
+                // SVG files cannot be converted to WebP, keep as SVG
+                if ($originalExtension === 'svg') {
+                    $imageName = time() . '.svg';
+                    $image->move($bannerDir, $imageName);
+                    $imagePath = 'bannerFile/' . $imageName;
+                } else {
+                    // Convert other image formats to WebP
+                    try {
+                        $imageName = time() . '.webp';
+                        $tempPath = $image->getRealPath();
+                        
+                        // Verify file exists and is readable
+                        if (!file_exists($tempPath) || !is_readable($tempPath)) {
+                            throw new \Exception('Image file is not readable');
+                        }
+                        
+                        // Check if GD or Imagick extension is available (required for image processing)
+                        $gdLoaded = extension_loaded('gd');
+                        $imagickLoaded = extension_loaded('imagick');
+                        
+                        if (!$gdLoaded && !$imagickLoaded) {
+                            // Log detailed information about loaded extensions
+                            $loadedExtensions = get_loaded_extensions();
+                            Log::error('GD/Imagick not available. Loaded extensions: ' . implode(', ', $loadedExtensions));
+                            throw new \Exception('GD or Imagick extension is required for image processing. GD: ' . ($gdLoaded ? 'YES' : 'NO') . ', Imagick: ' . ($imagickLoaded ? 'YES' : 'NO'));
+                        }
+                        
+                        // Check if WebP is supported by GD
+                        if (extension_loaded('gd')) {
+                            $gdInfo = gd_info();
+                            if (!isset($gdInfo['WebP Support']) || !$gdInfo['WebP Support']) {
+                                throw new \Exception('WebP is not supported by GD extension');
+                            }
+                        }
+                        
+                        // Create ImageManager instance for Intervention Image v3
+                        // Use GD driver if available, otherwise use Imagick
+                        $driver = extension_loaded('gd') ? new GdDriver() : new ImagickDriver();
+                        $manager = new ImageManager($driver);
+                        $img = $manager->read($tempPath);
+                        $webpPath = $bannerDir . '/' . $imageName;
+                        
+                        // Convert to WebP format using toWebp() method (Intervention Image v3)
+                        $img->toWebp(90)->save($webpPath);
+                        
+                        // Verify WebP file was created
+                        if (!file_exists($webpPath)) {
+                            throw new \Exception('WebP file was not created');
+                        }
+                        
+                        $imagePath = 'bannerFile/' . $imageName;
+                    } catch (\Exception $e) {
+                        // Log the error for debugging
+                        Log::error('WebP conversion failed in addBanner: ' . $e->getMessage(), [
+                            'file' => $image->getClientOriginalName(),
+                            'extension' => $originalExtension,
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                        // Fallback: if WebP conversion fails, save original format
+                        $imageName = time() . '.' . $originalExtension;
+                        $image->move($bannerDir, $imageName);
+                        $imagePath = 'bannerFile/' . $imageName;
+                    }
+                }
             }
 
             // Loop through each featured_id and create a banner for each
@@ -5382,13 +5591,85 @@ class AdminController extends Controller
             if ($request->hasFile('banner_file')) {
                 // If there is an existing file, delete it
                 if (!empty($adBanner->banner_file)) {
-                    Storage::delete('public/' . $adBanner->banner_file);
+                    $oldFilePath = public_path('storage/' . $adBanner->banner_file);
+                    if (file_exists($oldFilePath)) {
+                        unlink($oldFilePath);
+                    }
                 }
 
-                // Handle file upload
+                // Handle file upload - Save directly to public/storage/bannerFile
                 $image = $request->file('banner_file');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('bannerFile', $imageName, 'public');
+                $originalExtension = strtolower($image->getClientOriginalExtension());
+                $bannerDir = public_path('storage/bannerFile');
+                
+                if (!file_exists($bannerDir)) {
+                    mkdir($bannerDir, 0755, true);
+                }
+                
+                // SVG files cannot be converted to WebP, keep as SVG
+                if ($originalExtension === 'svg') {
+                    $imageName = time() . '.svg';
+                    $image->move($bannerDir, $imageName);
+                    $imagePath = 'bannerFile/' . $imageName;
+                } else {
+                    // Convert other image formats to WebP
+                    try {
+                        $imageName = time() . '.webp';
+                        $tempPath = $image->getRealPath();
+                        
+                        // Verify file exists and is readable
+                        if (!file_exists($tempPath) || !is_readable($tempPath)) {
+                            throw new \Exception('Image file is not readable');
+                        }
+                        
+                        // Check if GD or Imagick extension is available (required for image processing)
+                        $gdLoaded = extension_loaded('gd');
+                        $imagickLoaded = extension_loaded('imagick');
+                        
+                        if (!$gdLoaded && !$imagickLoaded) {
+                            // Log detailed information about loaded extensions
+                            $loadedExtensions = get_loaded_extensions();
+                            Log::error('GD/Imagick not available. Loaded extensions: ' . implode(', ', $loadedExtensions));
+                            throw new \Exception('GD or Imagick extension is required for image processing. GD: ' . ($gdLoaded ? 'YES' : 'NO') . ', Imagick: ' . ($imagickLoaded ? 'YES' : 'NO'));
+                        }
+                        
+                        // Check if WebP is supported by GD
+                        if (extension_loaded('gd')) {
+                            $gdInfo = gd_info();
+                            if (!isset($gdInfo['WebP Support']) || !$gdInfo['WebP Support']) {
+                                throw new \Exception('WebP is not supported by GD extension');
+                            }
+                        }
+                        
+                        // Create ImageManager instance for Intervention Image v3
+                        // Use GD driver if available, otherwise use Imagick
+                        $driver = extension_loaded('gd') ? new GdDriver() : new ImagickDriver();
+                        $manager = new ImageManager($driver);
+                        $img = $manager->read($tempPath);
+                        $webpPath = $bannerDir . '/' . $imageName;
+                        
+                        // Convert to WebP format using toWebp() method (Intervention Image v3)
+                        $img->toWebp(90)->save($webpPath);
+                        
+                        // Verify WebP file was created
+                        if (!file_exists($webpPath)) {
+                            throw new \Exception('WebP file was not created');
+                        }
+                        
+                        $imagePath = 'bannerFile/' . $imageName;
+                    } catch (\Exception $e) {
+                        // Log the error for debugging
+                        Log::error('WebP conversion failed in editBanner: ' . $e->getMessage(), [
+                            'file' => $image->getClientOriginalName(),
+                            'extension' => $originalExtension,
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                        // Fallback: if WebP conversion fails, save original format
+                        $imageName = time() . '.' . $originalExtension;
+                        $image->move($bannerDir, $imageName);
+                        $imagePath = 'bannerFile/' . $imageName;
+                    }
+                }
 
                 // Update the banner file path
                 $adBanner->banner_file = $imagePath;
@@ -5552,7 +5833,7 @@ class AdminController extends Controller
         try {
             $featuredList = stp_core_meta::query()
                 ->where('core_metaStatus', 1)
-                ->whereIn('id', [68, 69, 70, 71, 72, 73, 74])
+                ->whereIn('id', [68, 69, 70, 71, 72, 73, 74, 94, 95])
                 ->paginate(10)
                 ->through(function ($featured) {
                     $status = ($featured->status == 1) ? "Active" : "Inactive";
@@ -8275,17 +8556,14 @@ class AdminController extends Controller
 
             $authUser = Auth::user();
 
-            // Handle featured image upload - save to public/storage
+            // Handle featured image upload - save to public/storage and convert to WebP
             $featuredImagePath = null;
             if ($request->hasFile('featuredImage')) {
                 $image = $request->file('featuredImage');
-                $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
+                $imageName = time() . '_' . uniqid();
                 $destinationPath = public_path('storage/article_featured_images');
-                if (!file_exists($destinationPath)) {
-                    mkdir($destinationPath, 0755, true);
-                }
-                $image->move($destinationPath, $imageName);
-                $featuredImagePath = 'article_featured_images/' . $imageName;
+                $result = $this->convertImageToWebP($image, $destinationPath, $imageName);
+                $featuredImagePath = $result['path'];
             }
 
             // Create article first (we need the ID for image references)
@@ -8322,17 +8600,13 @@ class AdminController extends Controller
                     
                     // Check if it's a base64 image
                     if (preg_match('/^data:image\/(\w+);base64,(.+)$/', $src, $matches)) {
-                        $imageType = $matches[1];
                         $imageData = base64_decode($matches[2]);
                         
-                        // Save base64 image to file - save to public/storage
-                        $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $imageType;
-                        $imagePath = 'article_content_images/' . $imageName;
+                        // Convert to WebP and save to public/storage
+                        $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid();
                         $destinationPath = public_path('storage/article_content_images');
-                        if (!file_exists($destinationPath)) {
-                            mkdir($destinationPath, 0755, true);
-                        }
-                        file_put_contents(public_path('storage/' . $imagePath), $imageData);
+                        $result = $this->convertImageToWebP($imageData, $destinationPath, $imageName);
+                        $imagePath = $result['path'];
                         
                         // Generate default alt text if missing
                         if (empty($alt)) {
@@ -8356,32 +8630,26 @@ class AdminController extends Controller
                         try {
                             $imageData = file_get_contents($src);
                             if ($imageData !== false) {
-                                $imageInfo = @getimagesizefromstring($imageData);
-                                if ($imageInfo !== false) {
-                                    $extension = image_type_to_extension($imageInfo[2], false);
-                                    $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $extension;
-                                    $imagePath = 'article_content_images/' . $imageName;
-                                    $destinationPath = public_path('storage/article_content_images');
-                                    if (!file_exists($destinationPath)) {
-                                        mkdir($destinationPath, 0755, true);
-                                    }
-                                    file_put_contents(public_path('storage/' . $imagePath), $imageData);
-                                    
-                                    // Generate default alt text if missing
-                                    if (empty($alt)) {
-                                        $alt = 'Article image for ' . $article->article_title;
-                                    }
-                                    
-                                    $contentImage = stp_article_content_image::create([
-                                        'article_id' => $article->id,
-                                        'image_path' => $imagePath,
-                                        'image_alt' => $alt,
-                                        'data_status' => 1,
-                                        'created_by' => $authUser->id
-                                    ]);
-                                    
-                                    $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
+                                // Convert to WebP and save to public/storage
+                                $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid();
+                                $destinationPath = public_path('storage/article_content_images');
+                                $result = $this->convertImageToWebP($imageData, $destinationPath, $imageName);
+                                $imagePath = 'article_content_images/' . basename($result['path']);
+                                
+                                // Generate default alt text if missing
+                                if (empty($alt)) {
+                                    $alt = 'Article image for ' . $article->article_title;
                                 }
+                                
+                                $contentImage = stp_article_content_image::create([
+                                    'article_id' => $article->id,
+                                    'image_path' => $imagePath,
+                                    'image_alt' => $alt,
+                                    'data_status' => 1,
+                                    'created_by' => $authUser->id
+                                ]);
+                                
+                                $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
                             }
                         } catch (\Exception $e) {
                             // If download fails, keep original URL
@@ -8407,17 +8675,14 @@ class AdminController extends Controller
                 $article->update(['article_content' => $contentFilePath]);
             }
 
-            // Handle additional content images upload (separate from HTML) - save to public/storage
+            // Handle additional content images upload (separate from HTML) - save to public/storage and convert to WebP
             if ($request->hasFile('contentImages')) {
                 $contentImages = $request->file('contentImages');
                 $destinationPath = public_path('storage/article_content_images');
-                if (!file_exists($destinationPath)) {
-                    mkdir($destinationPath, 0755, true);
-                }
                 foreach ($contentImages as $image) {
-                    $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
-                    $image->move($destinationPath, $imageName);
-                    $imagePath = 'article_content_images/' . $imageName;
+                    $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid();
+                    $result = $this->convertImageToWebP($image, $destinationPath, $imageName);
+                    $imagePath = $result['path'];
                     
                     stp_article_content_image::create([
                         'article_id' => $article->id,
@@ -8492,13 +8757,10 @@ class AdminController extends Controller
                 }
                 
                 $image = $request->file('featuredImage');
-                $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
+                $imageName = time() . '_' . uniqid();
                 $destinationPath = public_path('storage/article_featured_images');
-                if (!file_exists($destinationPath)) {
-                    mkdir($destinationPath, 0755, true);
-                }
-                $image->move($destinationPath, $imageName);
-                $featuredImagePath = 'article_featured_images/' . $imageName;
+                $result = $this->convertImageToWebP($image, $destinationPath, $imageName);
+                $featuredImagePath = $result['path'];
             }
 
             // Handle article content - extract images and save as HTML file if new content is provided
@@ -8571,17 +8833,13 @@ class AdminController extends Controller
                     
                     // Check if it's a base64 image
                     if (preg_match('/^data:image\/(\w+);base64,(.+)$/', $src, $matches)) {
-                        $imageType = $matches[1];
                         $imageData = base64_decode($matches[2]);
                         
-                        // Save base64 image to file - save to public/storage
-                        $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $imageType;
-                        $imagePath = 'article_content_images/' . $imageName;
+                        // Convert to WebP and save to public/storage
+                        $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid();
                         $destinationPath = public_path('storage/article_content_images');
-                        if (!file_exists($destinationPath)) {
-                            mkdir($destinationPath, 0755, true);
-                        }
-                        file_put_contents(public_path('storage/' . $imagePath), $imageData);
+                        $result = $this->convertImageToWebP($imageData, $destinationPath, $imageName);
+                        $imagePath = $result['path'];
                         
                         // Generate default alt text if missing
                         if (empty($alt)) {
@@ -8616,33 +8874,27 @@ class AdminController extends Controller
                             
                             $imageData = @file_get_contents($src, false, $context);
                             if ($imageData !== false && strlen($imageData) > 0) {
-                                $imageInfo = @getimagesizefromstring($imageData);
-                                if ($imageInfo !== false) {
-                                    $extension = image_type_to_extension($imageInfo[2], false);
-                                    $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid() . '.' . $extension;
-                                    $imagePath = 'article_content_images/' . $imageName;
-                                    $destinationPath = public_path('storage/article_content_images');
-                                    if (!file_exists($destinationPath)) {
-                                        mkdir($destinationPath, 0755, true);
-                                    }
-                                    file_put_contents(public_path('storage/' . $imagePath), $imageData);
-                                    
-                                    // Generate default alt text if missing
-                                    if (empty($alt)) {
-                                        $alt = 'Article image for ' . $article->article_title;
-                                    }
-                                    
-                                    $contentImage = stp_article_content_image::create([
-                                        'article_id' => $article->id,
-                                        'image_path' => $imagePath,
-                                        'image_alt' => $alt,
-                                        'data_status' => 1,
-                                        'created_by' => $authUser->id
-                                    ]);
-                                    
-                                    $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
-                                    $imageIdsInContent[] = $contentImage->id;
+                                // Convert to WebP and save to public/storage
+                                $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid();
+                                $destinationPath = public_path('storage/article_content_images');
+                                $result = $this->convertImageToWebP($imageData, $destinationPath, $imageName);
+                                $imagePath = 'article_content_images/' . basename($result['path']);
+                                
+                                // Generate default alt text if missing
+                                if (empty($alt)) {
+                                    $alt = 'Article image for ' . $article->article_title;
                                 }
+                                
+                                $contentImage = stp_article_content_image::create([
+                                    'article_id' => $article->id,
+                                    'image_path' => $imagePath,
+                                    'image_alt' => $alt,
+                                    'data_status' => 1,
+                                    'created_by' => $authUser->id
+                                ]);
+                                
+                                $img->setAttribute('src', '[IMAGE_ID:' . $contentImage->id . ']');
+                                $imageIdsInContent[] = $contentImage->id;
                             }
                         } catch (\Exception $e) {
                             // If download fails, keep original URL (don't process it)

@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>New Applicant Received</title>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Google Sans isn't available via Google Fonts; we use it as primary font with safe fallbacks -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700&display=swap" rel="stylesheet">
     <style>
         .button {
             display: inline-block;
@@ -34,7 +35,7 @@
             display: block;
         }
         .tagline_text {
-            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-family: 'Google Sans', Arial, sans-serif;
             font-weight: bold;
             font-size: 14px;
             letter-spacing: 1px;
@@ -51,15 +52,23 @@
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
             border: none;
         }
+        /* School email specific applicant details card */
+        .school_applicant_details_card {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            border: 1px solid #f0f0f0;
+        }
         .details_title {
-            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-family: 'Google Sans', Arial, sans-serif;
             font-weight: 600;
             font-size: 20px;
             color: #000000;
             margin: 0 0 4px 0;
         }
         .details_subtitle {
-            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-family: 'Google Sans', Arial, sans-serif;
             font-weight: 400;
             font-size: 13px;
             color: #6b6b6b;
@@ -72,7 +81,7 @@
         .details_table td {
             padding: 10px 0;
             border-bottom: 1px solid #f0f0f0;
-            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-family: 'Google Sans', Arial, sans-serif;
             font-size: 15px;
             color: #000000;
         }
@@ -108,14 +117,14 @@
             background-position: center;
         }
         .hero_title {
-            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-family: 'Google Sans', Arial, sans-serif;
             font-weight: 700;
             font-size: 22px;
             color: #ffffff;
             margin: 0 0 12px 0;
         }
         .hero_text {
-            font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+            font-family: 'Google Sans', Arial, sans-serif;
             font-weight: 400;
             font-size: 14px;
             color: #ffffff;
@@ -124,7 +133,7 @@
         }
     </style>
 </head>
-<body style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; line-height: 1.6; color: #000000; background-color: #f2f2f2; margin: 0; padding: 0;">
+<body style="font-family: 'Google Sans', Arial, sans-serif; line-height: 1.6; color: #000000; background-color: #f2f2f2; margin: 0; padding: 0;">
     <table style="width: 100%; max-width: 600px; margin: 0 auto; border-collapse: collapse; background-color: #f2f2f2;">
         <!-- Header Section: apply_course_header -->
         <tr>
@@ -132,12 +141,12 @@
                 <table style="width: 100%; border-collapse: collapse;">
                     <tr>
                         <!-- Left Container (50%): StudyPal Logo -->
-                        <td class="header_left" style="width: 50%; padding: 20px 0 10px 0; vertical-align: middle;">
+                        <td class="header_left" style="width: 50%; padding-bottom: 10px; vertical-align: middle;">
                             <img src="https://backendstudypal.studypal.my/storage/assets/studypal.png" alt="StudyPal Logo" class="logo_img" style="height: 40px; width: auto; display: block;">
                         </td>
                         <!-- Right Container (50%): Tagline -->
                         <td class="header_right" style="width: 50%; vertical-align: middle; text-align: right;">
-                            <div class="tagline_text" style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: bold; font-size: 14px; letter-spacing: 1px; line-height: 1.4; text-align: right;">
+                            <div class="tagline_text" style="font-family: 'Google Sans', Arial, sans-serif; font-weight: bold; font-size: 14px; letter-spacing: 1px; line-height: 1.4; text-align: right;">
                                 <span class="tagline_red" style="color: #B71A18;">RECEIVE.</span>
                                 <span class="tagline_black" style="color: #000000;"> REVIEW.</span>
                                 <span class="tagline_red" style="color: #B71A18;"> RECRUIT.</span>
@@ -153,41 +162,35 @@
             <td style="padding: 0 0 20px 0;">
                 <div style="background-color: #ffffff; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);">
 
-                    <!-- Hero / Title Section -->
-                    <div class="hero_outer_card" style="box-shadow: none; border-radius: 12px; margin-bottom: 24px;">
-                    <table class="hero_table">
+                    <!-- Hero Image Section -->
+                    <table style="width: 100%; border-collapse: collapse;">
                         <tr>
-                            <!-- Left: Red overlay content -->
-                            <td class="hero_left" style="vertical-align: top;">
-                                <table style="width: 100%; border-collapse: collapse;">
-                                    <tr>
-                                        <td style="padding: 0;">
-                                            <p class="hero_title" style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 700; font-size: 22px; color: #ffffff; margin: 0 0 12px 0;">
-                                                New Applicant Received
-                                            </p>
-                                            <p class="hero_text" style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #ffffff; margin: 0 0 16px 0; line-height: 1.6;">
-                                                Dear <?php echo e($institute_name); ?>,
-                                            </p>
-                                            <p class="hero_text" style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #ffffff; margin: 0; line-height: 1.6;">
-                                                A new student has applied for one of your courses through our platform. Please review the application details below.
-                                            </p>
-                                        </td>
-                                    </tr>
-                                </table>
-                            </td>
-                            <!-- Right: Image -->
-                            <td class="hero_right" style="vertical-align: top;">
-                                <div class="hero_image_wrapper">
-                                    <!-- Decorative image container only -->
-                                    &nbsp;
-                                </div>
+                            <td style="padding: 0; height: 470px; background-image: url('https://backendstudypal.studypal.my/storage/assets/newApplicant.webp'); background-size: cover; background-position: center; background-repeat: no-repeat; border-radius: 16px;">
+                                &nbsp;
                             </td>
                         </tr>
                     </table>
+
+                    <!-- Intro Text -->
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="height: 40px; line-height: 18px; font-size: 1px;">&nbsp;</td>
+                        </tr>
+                    </table>
+                    <div style="padding: 10px 6px 18px 6px;">
+                        <p style="font-family: 'Google Sans', Arial, sans-serif; font-weight: 400; font-size: 16px; color: #000000; margin: 0; text-align: center; line-height: 1.6;">
+                            Dear <span style="font-weight: 700;"><?php echo e($institute_name); ?></span>,<br>
+                            A new student has applied for one of your courses through our platform. Please review the application details below.
+                        </p>
                     </div>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="height: 40px; line-height: 18px; font-size: 1px;">&nbsp;</td>
+                        </tr>
+                    </table>
 
                     <!-- Application Details (reused structure from applyCourseEmail) -->
-                    <div class="details_card" style="margin-bottom: 16px;">
+                    <div class="school_applicant_details_card" style="margin-bottom: 16px;">
                     <h3 class="details_title">Applicant Details</h3>
                     <table style="width: 100%; border-collapse: collapse; margin-bottom: 0;">
                         <tr>
@@ -229,15 +232,22 @@
                     </div>
 
                     <!-- Bottom Instruction Text -->
-                    <div style="padding: 0 4px 4px 4px;">
-                        <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 0 0 4px 0; text-align: left;">
-                            Please review the application at your earliest convenience.
-                        </p>
-                        <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 4px 0 0 0; text-align: left;">
-                            You can access the full application and any supporting documents through your
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="height: 18px; line-height: 18px; font-size: 1px;">&nbsp;</td>
+                        </tr>
+                    </table>
+                    <div style="padding: 14px 4px 18px 4px;">
+                        <p style="font-family: 'Google Sans'; font-weight: 400; font-size: 16px; color: #000000; margin: 0; text-align: center;">
+                            Please review the application at your earliest convenience. You can access the full application and any supporting documents through your
                             <a href="<?php echo e($actionUrl); ?>" style="color: #B71A18; text-decoration: underline;">Studypal Dashboard</a>.
                         </p>
                     </div>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="height: 18px; line-height: 18px; font-size: 1px;">&nbsp;</td>
+                        </tr>
+                    </table>
 
                 </div>
             </td>
@@ -250,13 +260,13 @@
                 <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
                     <tr>
                         <td style="text-align: center; padding: 0;">
-                            <h3 style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 600; font-size: 18px; color: #000000; margin: 0 0 15px 0;">
+                            <h3 style="font-family: 'Google Sans', Arial, sans-serif; font-weight: 600; font-size: 18px; color: #000000; margin: 0 0 15px 0;">
                                 Need Help?
                             </h3>
-                            <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 5px 0;">
+                            <p style="font-family: 'Google Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 5px 0;">
                                 Email: <a href="mailto:imediamyy@gmail.com" style="color: #B71A18; text-decoration: underline;">imediamyy@gmail.com</a>
                             </p>
-                            <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 5px 0;">
+                            <p style="font-family: 'Google Sans', Arial, sans-serif; font-weight: 400; font-size: 14px; color: #636363; margin: 5px 0;">
                                 Phone: <a href="tel:+60135538976" style="color: #636363; text-decoration: none;">+6013 5538976</a>
                             </p>
                         </td>
@@ -284,10 +294,10 @@
                 <table style="width: 100%; border-collapse: collapse;">
                     <tr>
                         <td style="text-align: center; padding: 20px;">
-                            <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 12px; color: #636363; margin: 5px 0;">
+                            <p style="font-family: 'Google Sans', Arial, sans-serif; font-weight: 400; font-size: 12px; color: #636363; margin: 5px 0;">
                                 © <?php echo e(date('Y')); ?> Studypal. All rights reserved.
                             </p>
-                            <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 12px; color: #636363; margin: 5px 0;">
+                            <p style="font-family: 'Google Sans', Arial, sans-serif; font-weight: 400; font-size: 12px; color: #636363; margin: 5px 0;">
                                 Lot 3493, No. 13 2nd Floor, Jalan Piasau, Piasau Commercial, 98000 Miri, Sarawak
                             </p>
                         </td>

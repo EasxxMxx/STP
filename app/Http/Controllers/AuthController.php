@@ -667,4 +667,59 @@ class AuthController extends Controller
     {
         return 'testing api';
     }
+
+    /**
+     * Refresh token for authenticated user
+     * This regenerates a new token and replaces the old one
+     */
+    public function refreshToken(Request $request)
+    {
+        try {
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json([
+                    'true' => false,
+                    'message' => 'User not authenticated',
+                ], 401);
+            }
+
+            // Delete the current token (removes old token from database)
+            // This ensures old tokens are invalidated when new ones are created
+            $currentToken = $request->user()->currentAccessToken();
+            if ($currentToken) {
+                $currentToken->delete();
+            }
+
+            // Create a new token
+            $token = $user->createToken('authToken')->plainTextToken;
+
+            // Get user data based on user type
+            $userData = null;
+            if ($user instanceof stp_student) {
+                $userData = stp_student::select('stp_students.*', 'stp_student_details.state_id')
+                    ->leftJoin('stp_student_details', 'stp_students.id', '=', 'stp_student_details.student_id')
+                    ->where('stp_students.id', $user->id)
+                    ->first();
+            } elseif ($user instanceof stp_school) {
+                $userData = $user;
+            } elseif ($user instanceof User) {
+                $userData = $user;
+            }
+
+            return response()->json([
+                'true' => true,
+                'data' => [
+                    'user' => $userData,
+                    'token' => $token,
+                ]
+            ], 200);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'true' => false,
+                'message' => $e->getMessage(),
+                'error' => '',
+            ], 500);
+        }
+    }
 }

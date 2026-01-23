@@ -492,6 +492,8 @@ Route::middleware('auth:sanctum')->get('validateToken', function () {
     ]);
 });
 
+Route::middleware('auth:sanctum')->post('refreshToken', [AuthController::class, 'refreshToken']);
+
 Route::middleware('auth:sanctum')->get('/test', [AuthController::class, 'test']);
 Route::middleware('auth:sanctum')->get('/test5', [AuthController::class, 'test']);
 Route::middleware('auth:sanctum')->get('/test6', [AdminController::class, 'studentList']);

@@ -29,4 +29,4 @@ class AppServiceProvider extends ServiceProvider
             return Limit::perMinute(60);
         });
     }
-} 
+}  

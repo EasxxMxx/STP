@@ -11,7 +11,7 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['https://adm.getpal.my', 'https://studypal.my', 'http://localhost:5174'],
+    'allowed_origins' => ['*'],
 
     'allowed_origins_patterns' => [],
 

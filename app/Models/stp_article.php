@@ -56,5 +56,11 @@ class stp_article extends Model
     {
         return $this->hasMany(stp_article_visit::class, 'article_id', 'id');
     }
+
+    // Relationship with article comments
+    public function comments()
+    {
+        return $this->hasMany(\App\Models\stp_article_comment::class, 'article_id', 'id')->where('data_status', 1);
+    }
 }
 

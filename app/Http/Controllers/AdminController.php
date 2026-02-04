@@ -48,6 +48,7 @@ use Intervention\Image\Drivers\Imagick\Driver as ImagickDriver;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Log;
+use App\Events\ArticlePublished;
 use Illuminate\Support\Facades\DB;
 
 
@@ -8693,6 +8694,9 @@ class AdminController extends Controller
                 }
             }
 
+            // Fire ArticlePublished event to check for newsletter milestone
+            event(new ArticlePublished($article));
+
             return response()->json([
                 'success' => true,
                 'data' => ['message' => "Successfully added the article"]
@@ -9245,6 +9249,11 @@ class AdminController extends Controller
                 'data_status' => $status,
                 'updated_by' => $authUser->id
             ]);
+
+            // When enabling (publishing) an article, fire event so milestone newsletter can send
+            if ($status === 1) {
+                event(new ArticlePublished($article));
+            }
 
             return response()->json([
                 'success' => true,

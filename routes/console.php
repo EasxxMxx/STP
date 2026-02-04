@@ -10,3 +10,6 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote')->hourly();
 
 // Schedule::command("app:send-interested-course-category-email-cron")->monthly();
+
+// Newsletter: send to all active subscribers on the 1st of every month at 9:00 (Asia/Kuala_Lumpur). Content based on current month.
+Schedule::command('newsletter:send-monthly')->monthlyOn(1, '9:00')->timezone('Asia/Kuala_Lumpur');

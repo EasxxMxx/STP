@@ -2,8 +2,16 @@
 
 use App\Http\Controllers\ProfileController;
 use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
+
+// Trigger newsletter send once (for testing without scheduler). Remove or protect in production.
+Route::get('/newsletter/send-now', function () {
+    Artisan::call('newsletter:send-monthly');
+    $output = Artisan::output();
+    return response()->json(['message' => 'Newsletter send completed.', 'output' => trim($output)]);
+});
 
 Route::get('/', function () {
     return Inertia::render('Welcome', [

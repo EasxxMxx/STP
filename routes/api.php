@@ -85,6 +85,9 @@ Route::prefix('student')->group(function () {
     Route::post('/articleDetail', [studentController::class, 'articleDetail']);
     Route::post('/articlesByCategory', [studentController::class, 'articlesByCategory']);
 
+    // Newsletter Subscription Route
+    Route::post('/subscribeNewsletter', [studentController::class, 'subscribeNewsletter']);
+
     // Article Comment Routes (Public for viewing, Auth required for creating/updating/deleting)
     Route::post('/getArticleComments', [studentController::class, 'getArticleComments']);
     Route::post('/createArticleComment', [studentController::class, 'createArticleComment'])->middleware('auth:sanctum');

@@ -40,6 +40,7 @@ use App\Models\stp_article_category;
 use App\Models\stp_article;
 use App\Models\stp_article_content_image;
 use App\Models\stp_article_comment;
+use App\Models\NewsletterSubscription;
 
 use App\Models\stp_totalNumberVisit;
 use App\Models\stp_article_visit;
@@ -52,6 +53,9 @@ use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
+use Intervention\Image\ImageManager;
+use Intervention\Image\Drivers\Gd\Driver as GdDriver;
+use Intervention\Image\Drivers\Imagick\Driver as ImagickDriver;
 
 use App\Rules\UniqueInArray;
 use Exception;
@@ -2274,30 +2278,35 @@ class studentController extends Controller
     {
         try {
             $request->validate([
-                'porfilePic' => 'required|image|mimes:jpeg,png,jpg,gif,svg|max:10000' // Image validationt
+                'porfilePic' => 'required|image|mimes:jpeg,png,jpg,gif,svg|max:10000' // Image validation
             ]);
             $authUser = Auth::user();
-
 
             if (!empty($authUser->student_profilePic)) {
                 Storage::delete('public/' . $authUser->student_profilePic);
             }
 
-
-
             $image = $request->file('porfilePic');
-            $imageName = time() . '.' . $image->getClientOriginalExtension();
+            $baseName = (string) time();
+            $destinationPath = public_path('storage/studentProfilePic');
 
-            $imagePath = $image->storeAs('studentProfilePic', $imageName, 'public'); // Store in 'storage/app/public/images'
+            $result = $this->convertImageToWebP($image, $destinationPath, $baseName);
+
+            if (!$result['success'] || empty($result['path'])) {
+                throw new \Exception($result['message'] ?? 'Image conversion failed');
+            }
+
             $authUser->update([
-                'student_profilePic' => $imagePath,
+                'student_profilePic' => $result['path'],
                 'updated_by' => $authUser->id
             ]);
-            // $authUser->student_profilePic = $imagePath; // Save the path to the database
 
             return response()->json([
                 'success' => true,
-                'data' => ['message' => 'Update profile successfully']
+                'data' => [
+                    'message' => 'Update profile successfully',
+                    'profilePic' => $result['path'] // WebP (or SVG) path so UI and comment section show updated pic
+                ]
             ]);
         } catch (\Exception $e) {
             return response()->json(
@@ -2313,6 +2322,68 @@ class studentController extends Controller
                 'message' => 'Validation Error',
                 'error' => $e->errors()
             ]);
+        }
+    }
+
+    /**
+     * Convert uploaded image to WebP (or keep SVG as-is). Used for profile pic.
+     * @param \Illuminate\Http\UploadedFile $imageSource
+     * @param string $destinationPath Full path to destination directory
+     * @param string $imageName Base name without extension
+     * @return array ['path' => relative path for DB, 'success' => bool, 'message' => string]
+     */
+    private function convertImageToWebP($imageSource, $destinationPath, $imageName): array
+    {
+        $originalExtension = strtolower($imageSource->getClientOriginalExtension() ?? 'jpg');
+
+        try {
+            if (!file_exists($destinationPath)) {
+                mkdir($destinationPath, 0755, true);
+            }
+
+            if ($originalExtension === 'svg') {
+                $finalPath = $destinationPath . '/' . $imageName . '.svg';
+                $imageSource->move($destinationPath, $imageName . '.svg');
+                $relativePath = 'studentProfilePic/' . $imageName . '.svg';
+                return ['path' => $relativePath, 'success' => true, 'message' => null];
+            }
+
+            $gdLoaded = extension_loaded('gd');
+            $imagickLoaded = extension_loaded('imagick');
+            if (!$gdLoaded && !$imagickLoaded) {
+                throw new \Exception('GD or Imagick extension is required for image processing');
+            }
+            if ($gdLoaded) {
+                $gdInfo = gd_info();
+                if (!isset($gdInfo['WebP Support']) || !$gdInfo['WebP Support']) {
+                    throw new \Exception('WebP is not supported by GD extension');
+                }
+            }
+
+            $tempPath = $imageSource->getRealPath();
+            $driver = $gdLoaded ? new GdDriver() : new ImagickDriver();
+            $manager = new ImageManager($driver);
+            $img = $manager->read($tempPath);
+            $webpPath = $destinationPath . '/' . $imageName . '.webp';
+            $img->toWebp(90)->save($webpPath);
+
+            if (!file_exists($webpPath)) {
+                throw new \Exception('WebP file was not created');
+            }
+
+            $relativePath = 'studentProfilePic/' . $imageName . '.webp';
+            return ['path' => $relativePath, 'success' => true, 'message' => null];
+        } catch (\Exception $e) {
+            Log::error('WebP conversion failed for profile pic: ' . $e->getMessage());
+            try {
+                $fallbackExt = in_array($originalExtension, ['jpeg', 'jpg', 'png', 'gif']) ? $originalExtension : 'jpg';
+                $fallbackPath = $destinationPath . '/' . $imageName . '.' . $fallbackExt;
+                $imageSource->move($destinationPath, $imageName . '.' . $fallbackExt);
+                $relativePath = 'studentProfilePic/' . $imageName . '.' . $fallbackExt;
+                return ['path' => $relativePath, 'success' => true, 'message' => null];
+            } catch (\Exception $fallbackEx) {
+                return ['path' => null, 'success' => false, 'message' => $fallbackEx->getMessage()];
+            }
         }
     }
 
@@ -5069,11 +5140,8 @@ class studentController extends Controller
                     'id' => $comment->id,
                     'article_id' => $comment->article_id,
                     'student_id' => $comment->student_id,
-                    'author_name' => $comment->student ? 
-                        (($comment->student->detail->student_detailFirstName ?? '') . ' ' . 
-                        ($comment->student->detail->student_detailLastName ?? '')) : 
-                        ($comment->author_name ?? 'Anonymous'),
-                    'profile_picture' => null, // Can be added if student model has profile pic
+                    'author_name' => $this->getCommentAuthorDisplayName($comment),
+                    'profile_picture' => $this->getCommentProfilePictureUrl($comment),
                     'parent_id' => $comment->parent_id,
                     'reply_to_id' => $comment->reply_to_id,
                     'comment_level' => $comment->comment_level,
@@ -5086,19 +5154,11 @@ class studentController extends Controller
 
                 // Get reply-to author info if exists
                 if ($comment->reply_to_id && $comment->replyTo) {
-                    $replyToComment = $comment->replyTo;
-                    $commentData['reply_to_author'] = $replyToComment->student ? 
-                        (($replyToComment->student->detail->student_detailFirstName ?? '') . ' ' . 
-                        ($replyToComment->student->detail->student_detailLastName ?? '')) : 
-                        ($replyToComment->author_name ?? 'Anonymous');
+                    $commentData['reply_to_author'] = $this->getCommentAuthorDisplayName($comment->replyTo);
                 } elseif ($comment->comment_level == 3 && $comment->reply_to_id === null && $comment->parent_id) {
-                    // Level 3 comment with removed reply_to - default to Level 2 parent
                     $parent = $comments->firstWhere('id', $comment->parent_id);
                     if ($parent && $parent->comment_level == 2) {
-                        $commentData['reply_to_author'] = $parent->student ? 
-                            (trim(($parent->student->detail->student_detailFirstName ?? '') . ' ' . 
-                            ($parent->student->detail->student_detailLastName ?? '')) ?: 'Anonymous') : 
-                            ($parent->author_name ?? 'Anonymous');
+                        $commentData['reply_to_author'] = $this->getCommentAuthorDisplayName($parent);
                     }
                 }
 
@@ -5278,11 +5338,8 @@ class studentController extends Controller
                 'id' => $comment->id,
                 'article_id' => $comment->article_id,
                 'student_id' => $comment->student_id,
-                'author_name' => $comment->student ? 
-                    (trim(($comment->student->detail->student_detailFirstName ?? '') . ' ' . 
-                    ($comment->student->detail->student_detailLastName ?? '')) ?: 'Anonymous') : 
-                    ($comment->author_name ?? 'Anonymous'),
-                'profile_picture' => null,
+                'author_name' => $this->getCommentAuthorDisplayName($comment),
+                'profile_picture' => $this->getCommentProfilePictureUrl($comment),
                 'parent_id' => $comment->parent_id,
                 'reply_to_id' => $comment->reply_to_id,
                 'comment_level' => $comment->comment_level,
@@ -5293,21 +5350,12 @@ class studentController extends Controller
                 'created_at_human' => $comment->created_at->diffForHumans(),
             ];
 
-            // Get reply-to author if exists
             if ($comment->reply_to_id && $comment->replyTo) {
-                $replyToComment = $comment->replyTo;
-                $responseData['reply_to_author'] = $replyToComment->student ? 
-                    (trim(($replyToComment->student->detail->student_detailFirstName ?? '') . ' ' . 
-                    ($replyToComment->student->detail->student_detailLastName ?? '')) ?: 'Anonymous') : 
-                    ($replyToComment->author_name ?? 'Anonymous');
+                $responseData['reply_to_author'] = $this->getCommentAuthorDisplayName($comment->replyTo);
             } elseif ($comment->comment_level == 3 && $comment->reply_to_id === null && $comment->parent_id) {
-                // Level 3 with removed reply_to - default to Level 2 parent
                 $parent = stp_article_comment::find($comment->parent_id);
                 if ($parent && $parent->comment_level == 2) {
-                    $responseData['reply_to_author'] = $parent->student ? 
-                        (($parent->student->detail->student_detailFirstName ?? '') . ' ' . 
-                        ($parent->student->detail->student_detailLastName ?? '')) : 
-                        ($parent->author_name ?? 'Anonymous');
+                    $responseData['reply_to_author'] = $this->getCommentAuthorDisplayName($parent);
                 }
             }
 
@@ -5448,11 +5496,8 @@ class studentController extends Controller
                 'id' => $comment->id,
                 'article_id' => $comment->article_id,
                 'student_id' => $comment->student_id,
-                'author_name' => $comment->student ? 
-                    (trim(($comment->student->detail->student_detailFirstName ?? '') . ' ' . 
-                    ($comment->student->detail->student_detailLastName ?? '')) ?: 'Anonymous') : 
-                    ($comment->author_name ?? 'Anonymous'),
-                'profile_picture' => null,
+                'author_name' => $this->getCommentAuthorDisplayName($comment),
+                'profile_picture' => $this->getCommentProfilePictureUrl($comment),
                 'parent_id' => $comment->parent_id,
                 'reply_to_id' => $comment->reply_to_id,
                 'comment_level' => $comment->comment_level,
@@ -5462,21 +5507,12 @@ class studentController extends Controller
                 'created_at_human' => $comment->created_at->diffForHumans(),
             ];
 
-            // Get reply-to author if exists, or default to Level 2 parent for Level 3
             if ($comment->reply_to_id && $comment->replyTo) {
-                $replyToComment = $comment->replyTo;
-                $responseData['reply_to_author'] = $replyToComment->student ? 
-                    ($replyToComment->student->student_detail->student_detailFirstName ?? 'Anonymous') . ' ' . 
-                    ($replyToComment->student->student_detail->student_detailLastName ?? '') : 
-                    ($replyToComment->author_name ?? 'Anonymous');
+                $responseData['reply_to_author'] = $this->getCommentAuthorDisplayName($comment->replyTo);
             } elseif ($comment->comment_level == 3 && $comment->reply_to_id === null && $comment->parent_id) {
-                // Level 3 with removed reply_to - default to Level 2 parent for display
                 $parent = stp_article_comment::find($comment->parent_id);
                 if ($parent && $parent->comment_level == 2) {
-                    $responseData['reply_to_author'] = $parent->student ? 
-                        (($parent->student->detail->student_detailFirstName ?? '') . ' ' . 
-                        ($parent->student->detail->student_detailLastName ?? '')) : 
-                        ($parent->author_name ?? 'Anonymous');
+                    $responseData['reply_to_author'] = $this->getCommentAuthorDisplayName($parent);
                 }
             }
 
@@ -6538,5 +6574,100 @@ class studentController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Subscribe to newsletter
+     * Only accepts Gmail addresses
+     */
+    public function subscribeNewsletter(Request $request)
+    {
+        try {
+            $request->validate([
+                'email' => 'required|email|ends_with:@gmail.com'
+            ], [
+                'email.required' => 'Email address is required.',
+                'email.email' => 'Please provide a valid email address.',
+                'email.ends_with' => 'Only Gmail addresses are accepted for newsletter subscription.'
+            ]);
+
+            $email = strtolower(trim($request->email));
+
+            // Check if email already exists
+            $existing = NewsletterSubscription::where('email', $email)->first();
+
+            if ($existing) {
+                if ($existing->is_active) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'This email is already subscribed to our newsletter.'
+                    ], 400);
+                } else {
+                    // Reactivate subscription
+                    $existing->is_active = true;
+                    $existing->subscribed_at = now();
+                    $existing->unsubscribed_at = null;
+                    $existing->save();
+
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'Your newsletter subscription has been reactivated!'
+                    ]);
+                }
+            }
+
+            // Create new subscription
+            NewsletterSubscription::create([
+                'email' => $email,
+                'is_active' => true,
+                'subscribed_at' => now()
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Successfully subscribed to newsletter!'
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get comment author display name: username (student_userName) so comment shows e.g. "ptt".
+     * Falls back to Anonymous when no student.
+     */
+    private function getCommentAuthorDisplayName($comment): string
+    {
+        if (!$comment || !$comment->student) {
+            return 'Anonymous';
+        }
+        $username = trim((string) ($comment->student->student_userName ?? ''));
+        return $username !== '' ? $username : 'Anonymous';
+    }
+
+    /**
+     * Get comment author profile picture: path (e.g. student_profile_pics/xyz.jpg) or full URL.
+     * Frontend builds full URL with VITE_BASE_URL + 'storage/' + path when path does not start with http.
+     */
+    private function getCommentProfilePictureUrl($comment): ?string
+    {
+        if (!$comment || !$comment->student || empty(trim((string) ($comment->student->student_profilePic ?? '')))) {
+            return null;
+        }
+        $path = trim($comment->student->student_profilePic);
+        if (filter_var($path, FILTER_VALIDATE_URL)) {
+            return $path;
+        }
+        return ltrim($path, '/');
     }
 }

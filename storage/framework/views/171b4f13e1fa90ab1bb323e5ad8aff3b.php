@@ -184,7 +184,7 @@
         <tr>
             <td style="background: #ffffff; border-radius: 0 0 12px 12px; padding: 30px; text-align: center; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);">
                 <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 16px; color: #000000; margin: 0;">
-                    Hi {{ $student_name }}, your application has been successfully submitted! The institution will review it soon.Please be aware that one of our education consultants may contact you in the future to assist with the next steps.
+                    Hi <?php echo e($student_name); ?>, your application has been successfully submitted! The institution will review it soon.
                 </p>
             </td>
         </tr>
@@ -201,7 +201,7 @@
                     <h3 class="details_title">Application Details</h3>
                     <table style="width: 100%; border-collapse: collapse; margin-bottom: 0;">
                         <tr>
-                            <td class="details_subtitle" style="text-align: left; padding: 0; border: none;">Submitted {{ $submitted_at }}</td>
+                            <td class="details_subtitle" style="text-align: left; padding: 0; border: none;">Submitted <?php echo e($submitted_at); ?></td>
                             <td style="text-align: right; padding: 0; border: none;">
                                 <a href="https://studypal.my/studentPortalBasicInformations" class="button" target="_blank" style="padding: 5px 30px; font-size: 13px; border-radius: 50px; background-color: #B71A18; border: 1px solid #B71A18; color: #ffffff !important; text-decoration: none; display: inline-block; margin-top: 0;">Check Status</a>
                             </td>
@@ -213,11 +213,11 @@
                     <table class="details_table">
                         <tr>
                             <td class="details_label" style="text-align: left;">Institution</td>
-                            <td style="text-align: right; font-weight: 500;">{{ $school_name }}</td>
+                            <td style="text-align: right; font-weight: 500;"><?php echo e($school_name); ?></td>
                         </tr>
                         <tr>
                             <td class="details_label" style="text-align: left;">Course Applied</td>
-                            <td style="text-align: right; font-weight: 500;">{{ $course_name }}</td>
+                            <td style="text-align: right; font-weight: 500;"><?php echo e($course_name); ?></td>
                         </tr>
                     </table>
                 </div>
@@ -330,7 +330,7 @@
                     <tr>
                         <td style="text-align: center; padding: 20px;">
                             <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 12px; color: #636363; margin: 5px 0;">
-                                © {{ date('Y') }} Studypal. All rights reserved.
+                                © <?php echo e(date('Y')); ?> Studypal. All rights reserved.
                             </p>
                             <p style="font-family: 'Plus Jakarta Sans', Arial, sans-serif; font-weight: 400; font-size: 12px; color: #636363; margin: 5px 0;">
                                 Lot 3493, No. 13 2nd Floor, Jalan Piasau, Piasau Commercial, 98000 Miri, Sarawak
@@ -344,3 +344,4 @@
 </html>
 
 
+<?php /**PATH C:\xamppp\htdocs\studypal1\STP\resources\views/emails/applyCourseEmail.blade.php ENDPATH**/ ?>

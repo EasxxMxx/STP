@@ -22,6 +22,8 @@ Route::post('/student/login', [AuthController::class, 'studentLogin']);
 Route::post('/student/studentInfoValidation', [AuthController::class, 'studentInfoValidation']);
 Route::post('/student/validateContactNum', [AuthController::class, 'validateContactNum']);
 Route::post('/student/register', [AuthController::class, 'studentRegister']);
+Route::post('/student/verifyOtp', [AuthController::class, 'verifyStudentOtp']);
+Route::post('/student/resendOtp', [AuthController::class, 'resendStudentOtp']);
 
 Route::post('/school/login', [AuthController::class, 'schoolLogin']);
 Route::post('/school/register', [AuthController::class, 'schoolRegister']);

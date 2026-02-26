@@ -50,6 +50,7 @@ use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Log;
 use App\Events\ArticlePublished;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 
 
@@ -84,6 +85,10 @@ class AdminController extends Controller
             if (!file_exists($destinationPath)) {
                 mkdir($destinationPath, 0755, true);
             }
+
+            // Derive the folder name for building a relative storage path
+            $normalizedDestination = str_replace('\\', '/', rtrim($destinationPath, '/\\'));
+            $folder = basename($normalizedDestination);
 
             // Determine image source type and get temp path
             $tempPath = null;
@@ -121,7 +126,7 @@ class AdminController extends Controller
                 } else {
                     file_put_contents($finalPath, $imageSource);
                 }
-                $relativePath = str_replace(public_path('storage/'), '', $destinationPath) . '/' . $imageName . '.svg';
+                $relativePath = $folder . '/' . $imageName . '.svg';
                 return [
                     'path' => $relativePath,
                     'fullPath' => $finalPath,
@@ -165,7 +170,7 @@ class AdminController extends Controller
                 @unlink($tempPath);
             }
 
-            $relativePath = str_replace(public_path('storage/'), '', $destinationPath) . '/' . $imageName . '.webp';
+            $relativePath = $folder . '/' . $imageName . '.webp';
             return [
                 'path' => $relativePath,
                 'fullPath' => $webpPath,
@@ -189,7 +194,7 @@ class AdminController extends Controller
                     file_put_contents($fallbackPath, $imageSource);
                 }
 
-                $relativePath = str_replace(public_path('storage/'), '', $destinationPath) . '/' . $imageName . '.' . $fallbackExtension;
+                $relativePath = $folder . '/' . $imageName . '.' . $fallbackExtension;
                 return [
                     'path' => $relativePath,
                     'fullPath' => $fallbackPath,
@@ -241,12 +246,6 @@ class AdminController extends Controller
                 throw ValidationException::withMessages([
                     'contact_no' => ['Contact has been used'],
                 ]);
-            }
-
-            if ($request->hasFile('student_profilePic')) {
-                $image = $request->file('student_profilePic');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('student_profilePic', $imageName, 'public'); // Store in 'storage/app/public/images'
             }
 
             $checkingEmail = stp_student::where('student_email', $request->email)
@@ -510,7 +509,6 @@ class AdminController extends Controller
                 'country_code' => 'nullable|integer',
                 'contact_number' => 'nullable|numeric|digits_between:1,15',
                 'email' => 'required|string|email|max:255',
-                'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:10000' // Image validation
             ]);
 
             $authUser = Auth::user();
@@ -547,18 +545,6 @@ class AdminController extends Controller
 
             $student = stp_student::find($request->id);
             $studentDetail = $student->detail;
-
-            // Handle image upload
-            if ($request->hasFile('image')) {
-                if (!empty($student->student_profilePic)) {
-                    Storage::delete('public/' . $student->student_profilePic);
-                }
-
-                $image = $request->file('image');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('studentProfilePic', $imageName, 'public');
-                $student->student_profilePic = $imagePath;
-            }
 
             // Check email uniqueness
             $checkingEmail = stp_student::where('student_email', $request->email)
@@ -881,8 +867,10 @@ class AdminController extends Controller
 
             if ($request->hasFile('logo')) {
                 $image = $request->file('logo');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('schoolLogo', $imageName, 'public');
+                $destinationPath = public_path('storage/schoolLogo');
+                $baseName = time() . '_' . Str::random(8);
+                $result = $this->convertImageToWebP($image, $destinationPath, $baseName);
+                $imagePath = $result['path'] ?? null;
             }
 
             $placeName =  $request->name; // E.g., 'Eiffel Tower, Paris, France'
@@ -925,47 +913,50 @@ class AdminController extends Controller
 
             // Handle cover photo
             if ($request->hasFile('cover')) {
-                // Upload the new cover
                 $cover = $request->file('cover');
-                $coverName = $school->school_name . '_cover.' . $cover->getClientOriginalExtension();
-                $coverPath = $cover->storeAs('schoolMedia', $coverName, 'public');
+                $destinationPath = public_path('storage/schoolMedia');
+                $coverBaseName = preg_replace('/[^a-zA-Z0-9_-]/', '_', $school->school_name) . '_cover';
+                $result = $this->convertImageToWebP($cover, $destinationPath, $coverBaseName);
+                $coverPath = $result['path'] ?? null;
+                $coverName = $coverPath ? basename($coverPath) : null;
+                $coverFormat = $coverPath ? pathinfo($coverPath, PATHINFO_EXTENSION) : null;
 
-                // Extract the file extension
-                $coverFormat = $cover->getClientOriginalExtension();
-
-                // Save cover photo in the stp_school_media table
-                stp_school_media::create([
-                    'school_id' => $school->id,
-                    'schoolMedia_type' => 66, // Cover photo type
-                    'schoolMedia_name' => $coverName,
-                    'schoolMedia_location' => $coverPath,
-                    'schoolMedia_format' => $coverFormat, // Save file extension
-                    'schoolMedia_status' => 1,
-                    'created_by' => $authUser->id,
-                    'created_at' => now()
-                ]);
-            }
-
-            // Handle photo album
-            if ($request->hasFile('album')) {
-                foreach ($request->file('album') as $albumPhoto) {
-                    $albumPhotoName = $albumPhoto->getClientOriginalName();
-                    $albumPhotoPath = $albumPhoto->storeAs('schoolMedia', $albumPhotoName, 'public');
-
-                    // Extract the file extension
-                    $albumPhotoFormat = $albumPhoto->getClientOriginalExtension();
-
-                    // Save each photo in the stp_school_media table
+                if ($coverPath) {
                     stp_school_media::create([
                         'school_id' => $school->id,
-                        'schoolMedia_type' => 67, // Album photo type
-                        'schoolMedia_name' => $albumPhotoName,
-                        'schoolMedia_location' => $albumPhotoPath,
-                        'schoolMedia_format' => $albumPhotoFormat, // Save file extension
+                        'schoolMedia_type' => 66,
+                        'schoolMedia_name' => $coverName,
+                        'schoolMedia_location' => $coverPath,
+                        'schoolMedia_format' => $coverFormat,
                         'schoolMedia_status' => 1,
                         'created_by' => $authUser->id,
                         'created_at' => now()
                     ]);
+                }
+            }
+
+            // Handle photo album
+            if ($request->hasFile('album')) {
+                $albumIndex = 0;
+                foreach ($request->file('album') as $albumPhoto) {
+                    $destinationPath = public_path('storage/schoolMedia');
+                    $albumBaseName = pathinfo($albumPhoto->getClientOriginalName(), PATHINFO_FILENAME) . '_' . time() . '_' . $albumIndex++;
+                    $result = $this->convertImageToWebP($albumPhoto, $destinationPath, $albumBaseName);
+                    $albumPhotoPath = $result['path'] ?? null;
+                    $albumPhotoName = $albumPhotoPath ? basename($albumPhotoPath) : null;
+                    $albumPhotoFormat = $albumPhotoPath ? pathinfo($albumPhotoPath, PATHINFO_EXTENSION) : null;
+                    if ($albumPhotoPath) {
+                        stp_school_media::create([
+                            'school_id' => $school->id,
+                            'schoolMedia_type' => 67,
+                            'schoolMedia_name' => $albumPhotoName,
+                            'schoolMedia_location' => $albumPhotoPath,
+                            'schoolMedia_format' => $albumPhotoFormat,
+                            'schoolMedia_status' => 1,
+                            'created_by' => $authUser->id,
+                            'created_at' => now()
+                        ]);
+                    }
                 }
             }
             // Insert each featured type into the stp_featureds table
@@ -1070,8 +1061,10 @@ class AdminController extends Controller
                     Storage::delete('public/' . $school->school_logo);
                 }
                 $image = $request->file('logo');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('schoolLogo', $imageName, 'public');
+                $destinationPath = public_path('storage/schoolLogo');
+                $baseName = time() . '_' . Str::random(8);
+                $result = $this->convertImageToWebP($image, $destinationPath, $baseName);
+                $imagePath = $result['path'] ?? null;
             }
 
             // Handle cover photo update
@@ -1083,37 +1076,37 @@ class AdminController extends Controller
                 }
 
                 $cover = $request->file('cover');
-                $coverName = $school->school_name . '_cover.' . $cover->getClientOriginalExtension();
-                $coverPath = $cover->storeAs('schoolMedia', $coverName, 'public');
-                $coverFormat = $cover->getClientOriginalExtension();
-
-                stp_school_media::create([
-                    'school_id' => $school->id,
-                    'schoolMedia_type' => 66,
-                    'schoolMedia_name' => $coverName,
-                    'schoolMedia_location' => $coverPath,
-                    'schoolMedia_format' => $coverFormat,
-                    'schoolMedia_status' => 1,
-                    'created_by' => $authUser->id,
-                    'created_at' => now()
-                ]);
+                $destinationPath = public_path('storage/schoolMedia');
+                $coverBaseName = preg_replace('/[^a-zA-Z0-9_-]/', '_', $school->school_name) . '_cover';
+                $result = $this->convertImageToWebP($cover, $destinationPath, $coverBaseName);
+                $coverPath = $result['path'] ?? null;
+                $coverName = $coverPath ? basename($coverPath) : null;
+                $coverFormat = $coverPath ? pathinfo($coverPath, PATHINFO_EXTENSION) : null;
+                if ($coverPath) {
+                    stp_school_media::create([
+                        'school_id' => $school->id,
+                        'schoolMedia_type' => 66,
+                        'schoolMedia_name' => $coverName,
+                        'schoolMedia_location' => $coverPath,
+                        'schoolMedia_format' => $coverFormat,
+                        'schoolMedia_status' => 1,
+                        'created_by' => $authUser->id,
+                        'created_at' => now()
+                    ]);
+                }
             }
 
             // Handle album photo update
             if ($request->hasFile('album')) {
+                $albumIndex = 0;
                 foreach ($request->file('album') as $albumPhoto) {
-                    // Check if this specific album photo already exists for the school
-                    $albumPhotoName = $albumPhoto->getClientOriginalName();
-                    $existingAlbumPhoto = stp_school_media::where('school_id', $school->id)
-                        ->where('schoolMedia_name', $albumPhotoName)
-                        ->where('schoolMedia_type', 67) // Ensure it's an album photo
-                        ->first();
-
-                    // If the album photo doesn't exist, store and create a new record
-                    if (!$existingAlbumPhoto) {
-                        $albumPhotoPath = $albumPhoto->storeAs('schoolMedia', $albumPhotoName, 'public');
-                        $albumPhotoFormat = $albumPhoto->getClientOriginalExtension();
-
+                    $destinationPath = public_path('storage/schoolMedia');
+                    $albumBaseName = pathinfo($albumPhoto->getClientOriginalName(), PATHINFO_FILENAME) . '_' . time() . '_' . $albumIndex++;
+                    $result = $this->convertImageToWebP($albumPhoto, $destinationPath, $albumBaseName);
+                    $albumPhotoPath = $result['path'] ?? null;
+                    $albumPhotoName = $albumPhotoPath ? basename($albumPhotoPath) : null;
+                    $albumPhotoFormat = $albumPhotoPath ? pathinfo($albumPhotoPath, PATHINFO_EXTENSION) : null;
+                    if ($albumPhotoPath) {
                         stp_school_media::create([
                             'school_id' => $school->id,
                             'schoolMedia_type' => 67,
@@ -1552,11 +1545,10 @@ class AdminController extends Controller
             }
             if ($request->hasFile('logo')) {
                 $image = $request->file('logo');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                // Store directly in public/storage/courseLogo/
                 $destinationPath = public_path('storage/courseLogo');
-                $image->move($destinationPath, $imageName);
-                $imagePath = 'courseLogo/' . $imageName;
+                $baseName = time() . '_' . Str::random(8);
+                $result = $this->convertImageToWebP($image, $destinationPath, $baseName);
+                $imagePath = $result['path'] ?? null;
             }
             $course = stp_course::create([
                 'school_id' => $request->schoolID,
@@ -2378,20 +2370,17 @@ class AdminController extends Controller
             // Handle logo upload
             $imagePath = $course->course_logo; // Default to current course logo
             if ($request->hasFile('logo')) {
-                // Delete old image if it exists
                 if ($imagePath) {
                     $oldFilePath = public_path('storage/' . $imagePath);
                     if (file_exists($oldFilePath)) {
                         unlink($oldFilePath);
                     }
                 }
-                // Store new image
                 $image = $request->file('logo');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                // Store directly in public/storage/courseLogo/
                 $destinationPath = public_path('storage/courseLogo');
-                $image->move($destinationPath, $imageName);
-                $imagePath = 'courseLogo/' . $imageName;
+                $baseName = time() . '_' . Str::random(8);
+                $result = $this->convertImageToWebP($image, $destinationPath, $baseName);
+                $imagePath = $result['path'] ?? $imagePath;
             }
 
             \Log::info('Reached updated course log line');
@@ -2747,8 +2736,10 @@ class AdminController extends Controller
 
             if ($request->hasFile('icon')) {
                 $image = $request->file('icon');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('courseCategoryIcon', $imageName, 'public'); // Store in 'storage/app/public/images'
+                $destinationPath = public_path('storage/courseCategoryIcon');
+                $baseName = time() . '_' . Str::random(8);
+                $result = $this->convertImageToWebP($image, $destinationPath, $baseName);
+                $imagePath = $result['path'] ?? null;
             }
 
             $data = [
@@ -2805,13 +2796,13 @@ class AdminController extends Controller
             // If a new icon is uploaded, store the image and delete the old one
             if ($request->hasFile('icon')) {
                 if (!empty($category->category_icon)) {
-                    Storage::delete('public/' . $category->category_icon); // Delete the old icon
+                    Storage::delete('public/' . $category->category_icon);
                 }
-
-                // Store the new icon
                 $image = $request->file('icon');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('courseCategoryIcon', $imageName, 'public'); // Store in 'storage/app/public/courseCategoryIcon'
+                $destinationPath = public_path('storage/courseCategoryIcon');
+                $baseName = time() . '_' . Str::random(8);
+                $result = $this->convertImageToWebP($image, $destinationPath, $baseName);
+                $imagePath = $result['path'] ?? null;
             } else {
                 // If no new icon is uploaded, use the existing icon
                 $imagePath = $category->category_icon;
@@ -4922,18 +4913,6 @@ class AdminController extends Controller
                 throw ValidationException::withMessages($errorMessage);
             }
 
-
-
-
-
-            if ($request->hasFile('profile_pic')) {
-                $image = $request->file('profile_pic');
-                $imageName = time() . '.' . $image->getClientOriginalExtension();
-                $imagePath = $image->storeAs('profilePic', $imageName, 'public'); // Store in 'storage/app/public/images'
-            }
-
-
-
             $user = User::create([
                 'name' => $request->name,
                 'email' => $request->email,
@@ -4941,7 +4920,7 @@ class AdminController extends Controller
                 'country_code' => $request->country_code,
                 'contact_no' => $request->contact_no,
                 'password' => $request->password,
-                'profile_pic' => $imagePath ?? '', // Image validation
+                'profile_pic' => '',
                 'user_role' => 1,
                 'status' => 1,
                 'created_by' => $authUser->id,
@@ -5449,80 +5428,13 @@ class AdminController extends Controller
             $authUser = Auth::user();
             $imagePath = null;
 
-            // Handle the banner file upload
+            // Handle the banner file upload using the shared WebP conversion helper
             if ($request->hasFile('banner_file')) {
                 $image = $request->file('banner_file');
-                $originalExtension = strtolower($image->getClientOriginalExtension());
-                $bannerDir = public_path('storage/bannerFile');
-                
-                if (!file_exists($bannerDir)) {
-                    mkdir($bannerDir, 0755, true);
-                }
-                
-                // SVG files cannot be converted to WebP, keep as SVG
-                if ($originalExtension === 'svg') {
-                    $imageName = time() . '.svg';
-                    $image->move($bannerDir, $imageName);
-                    $imagePath = 'bannerFile/' . $imageName;
-                } else {
-                    // Convert other image formats to WebP
-                    try {
-                        $imageName = time() . '.webp';
-                        $tempPath = $image->getRealPath();
-                        
-                        // Verify file exists and is readable
-                        if (!file_exists($tempPath) || !is_readable($tempPath)) {
-                            throw new \Exception('Image file is not readable');
-                        }
-                        
-                        // Check if GD or Imagick extension is available (required for image processing)
-                        $gdLoaded = extension_loaded('gd');
-                        $imagickLoaded = extension_loaded('imagick');
-                        
-                        if (!$gdLoaded && !$imagickLoaded) {
-                            // Log detailed information about loaded extensions
-                            $loadedExtensions = get_loaded_extensions();
-                            Log::error('GD/Imagick not available. Loaded extensions: ' . implode(', ', $loadedExtensions));
-                            throw new \Exception('GD or Imagick extension is required for image processing. GD: ' . ($gdLoaded ? 'YES' : 'NO') . ', Imagick: ' . ($imagickLoaded ? 'YES' : 'NO'));
-                        }
-                        
-                        // Check if WebP is supported by GD
-                        if (extension_loaded('gd')) {
-                            $gdInfo = gd_info();
-                            if (!isset($gdInfo['WebP Support']) || !$gdInfo['WebP Support']) {
-                                throw new \Exception('WebP is not supported by GD extension');
-                            }
-                        }
-                        
-                        // Create ImageManager instance for Intervention Image v3
-                        // Use GD driver if available, otherwise use Imagick
-                        $driver = extension_loaded('gd') ? new GdDriver() : new ImagickDriver();
-                        $manager = new ImageManager($driver);
-                        $img = $manager->read($tempPath);
-                        $webpPath = $bannerDir . '/' . $imageName;
-                        
-                        // Convert to WebP format using toWebp() method (Intervention Image v3)
-                        $img->toWebp(90)->save($webpPath);
-                        
-                        // Verify WebP file was created
-                        if (!file_exists($webpPath)) {
-                            throw new \Exception('WebP file was not created');
-                        }
-                        
-                        $imagePath = 'bannerFile/' . $imageName;
-                    } catch (\Exception $e) {
-                        // Log the error for debugging
-                        Log::error('WebP conversion failed in addBanner: ' . $e->getMessage(), [
-                            'file' => $image->getClientOriginalName(),
-                            'extension' => $originalExtension,
-                            'trace' => $e->getTraceAsString()
-                        ]);
-                        // Fallback: if WebP conversion fails, save original format
-                        $imageName = time() . '.' . $originalExtension;
-                        $image->move($bannerDir, $imageName);
-                        $imagePath = 'bannerFile/' . $imageName;
-                    }
-                }
+                $destinationPath = public_path('storage/bannerFile');
+                $baseName = time() . '_' . Str::random(8);
+                $result = $this->convertImageToWebP($image, $destinationPath, $baseName);
+                $imagePath = $result['path'] ?? null;
             }
 
             // Loop through each featured_id and create a banner for each
@@ -5598,79 +5510,12 @@ class AdminController extends Controller
                     }
                 }
 
-                // Handle file upload - Save directly to public/storage/bannerFile
+                // Handle file upload using the shared WebP conversion helper
                 $image = $request->file('banner_file');
-                $originalExtension = strtolower($image->getClientOriginalExtension());
-                $bannerDir = public_path('storage/bannerFile');
-                
-                if (!file_exists($bannerDir)) {
-                    mkdir($bannerDir, 0755, true);
-                }
-                
-                // SVG files cannot be converted to WebP, keep as SVG
-                if ($originalExtension === 'svg') {
-                    $imageName = time() . '.svg';
-                    $image->move($bannerDir, $imageName);
-                    $imagePath = 'bannerFile/' . $imageName;
-                } else {
-                    // Convert other image formats to WebP
-                    try {
-                        $imageName = time() . '.webp';
-                        $tempPath = $image->getRealPath();
-                        
-                        // Verify file exists and is readable
-                        if (!file_exists($tempPath) || !is_readable($tempPath)) {
-                            throw new \Exception('Image file is not readable');
-                        }
-                        
-                        // Check if GD or Imagick extension is available (required for image processing)
-                        $gdLoaded = extension_loaded('gd');
-                        $imagickLoaded = extension_loaded('imagick');
-                        
-                        if (!$gdLoaded && !$imagickLoaded) {
-                            // Log detailed information about loaded extensions
-                            $loadedExtensions = get_loaded_extensions();
-                            Log::error('GD/Imagick not available. Loaded extensions: ' . implode(', ', $loadedExtensions));
-                            throw new \Exception('GD or Imagick extension is required for image processing. GD: ' . ($gdLoaded ? 'YES' : 'NO') . ', Imagick: ' . ($imagickLoaded ? 'YES' : 'NO'));
-                        }
-                        
-                        // Check if WebP is supported by GD
-                        if (extension_loaded('gd')) {
-                            $gdInfo = gd_info();
-                            if (!isset($gdInfo['WebP Support']) || !$gdInfo['WebP Support']) {
-                                throw new \Exception('WebP is not supported by GD extension');
-                            }
-                        }
-                        
-                        // Create ImageManager instance for Intervention Image v3
-                        // Use GD driver if available, otherwise use Imagick
-                        $driver = extension_loaded('gd') ? new GdDriver() : new ImagickDriver();
-                        $manager = new ImageManager($driver);
-                        $img = $manager->read($tempPath);
-                        $webpPath = $bannerDir . '/' . $imageName;
-                        
-                        // Convert to WebP format using toWebp() method (Intervention Image v3)
-                        $img->toWebp(90)->save($webpPath);
-                        
-                        // Verify WebP file was created
-                        if (!file_exists($webpPath)) {
-                            throw new \Exception('WebP file was not created');
-                        }
-                        
-                        $imagePath = 'bannerFile/' . $imageName;
-                    } catch (\Exception $e) {
-                        // Log the error for debugging
-                        Log::error('WebP conversion failed in editBanner: ' . $e->getMessage(), [
-                            'file' => $image->getClientOriginalName(),
-                            'extension' => $originalExtension,
-                            'trace' => $e->getTraceAsString()
-                        ]);
-                        // Fallback: if WebP conversion fails, save original format
-                        $imageName = time() . '.' . $originalExtension;
-                        $image->move($bannerDir, $imageName);
-                        $imagePath = 'bannerFile/' . $imageName;
-                    }
-                }
+                $destinationPath = public_path('storage/bannerFile');
+                $baseName = time() . '_' . Str::random(8);
+                $result = $this->convertImageToWebP($image, $destinationPath, $baseName);
+                $imagePath = $result['path'] ?? null;
 
                 // Update the banner file path
                 $adBanner->banner_file = $imagePath;
@@ -9051,21 +8896,19 @@ class AdminController extends Controller
             // Handle new content images upload
             if ($request->hasFile('contentImages')) {
                 $contentImages = $request->file('contentImages');
+                $destinationPath = public_path('storage/article_content_images');
                 foreach ($contentImages as $image) {
-                    $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
-                    $destinationPath = public_path('storage/article_content_images');
-                    if (!file_exists($destinationPath)) {
-                        mkdir($destinationPath, 0755, true);
+                    $imageName = 'article_' . $article->id . '_' . time() . '_' . uniqid();
+                    $result = $this->convertImageToWebP($image, $destinationPath, $imageName);
+                    $imagePath = $result['path'] ?? null;
+                    if ($imagePath) {
+                        stp_article_content_image::create([
+                            'article_id' => $article->id,
+                            'image_path' => $imagePath,
+                            'data_status' => 1,
+                            'created_by' => $authUser->id
+                        ]);
                     }
-                    $image->move($destinationPath, $imageName);
-                    $imagePath = 'article_content_images/' . $imageName;
-                    
-                    stp_article_content_image::create([
-                        'article_id' => $article->id,
-                        'image_path' => $imagePath,
-                        'data_status' => 1,
-                        'created_by' => $authUser->id
-                    ]);
                 }
             }
 

@@ -11,12 +11,14 @@ use App\Models\stp_core_meta;
 use App\Models\stp_student_detail;
 use App\Models\stp_user_detail;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Validator;
 use PhpParser\Node\Stmt\Else_;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationData;
 use App\Services\ServiceFunction;
+use Carbon\Carbon;
 
 class AuthController extends Controller
 {
@@ -197,6 +199,13 @@ class AuthController extends Controller
             if (!Hash::check($request->password, $user->student_password)) {
                 throw ValidationException::withMessages([
                     'credentials' => ['The provided password is incorrect.'],
+                ]);
+            }
+
+            // Check if OTP is verified (only allow login for verified users)
+            if ($user->otp_status != 1) {
+                throw ValidationException::withMessages([
+                    'otp' => ['Please verify your phone number with OTP before logging in.'],
                 ]);
             }
 
@@ -455,6 +464,10 @@ class AuthController extends Controller
                 ]);
             }
 
+            // Generate OTP
+            $otp = rand(100000, 999999);
+            $otpExpiredTime = now()->setTimezone('Asia/Kuala_Lumpur')->addMinutes(5)->format('Y-m-d H:i:s');
+            
             $checkEmailWithSocialLogin = stp_student::where('student_email', $request->email)
                 ->whereNull('student_password')
                 ->first();
@@ -467,11 +480,12 @@ class AuthController extends Controller
                     'student_nationality' => $request->student_nationality,
                     'student_password' => Hash::make($request->password),
                     'student_icNumber' => $request->ic,
+                    'otp' => $otp,
+                    'otp_expired_time' => $otpExpiredTime,
+                    'otp_status' => 0 // Not verified yet
                 ];
                 $checkEmailWithSocialLogin->update($data);
-
-                // Send welcome email for social login user completing registration
-                $this->serviceFunction->sendWelcomeEmail($request->name, $request->email);
+                $student = $checkEmailWithSocialLogin;
             } else {
                 $data = [
                     'student_userName' => $request->name,
@@ -481,24 +495,203 @@ class AuthController extends Controller
                     'student_contactNo' => $request->contact_number,
                     'student_password' => Hash::make($request->password),
                     'student_icNumber' => $request->ic,
-                    'user_role' => 4
+                    'user_role' => 4,
+                    'otp' => $otp,
+                    'otp_expired_time' => $otpExpiredTime,
+                    'otp_status' => 0 // Not verified yet
                 ];
-                $newUser = stp_student::create($data);
+                $student = stp_student::create($data);
                 $userdetail = stp_student_detail::create([
-                    'student_id' => $newUser->id
+                    'student_id' => $student->id
                 ]);
-
-                // Send welcome email to newly registered student
-                $this->serviceFunction->sendWelcomeEmail($request->name, $request->email);
             }
+
+            // Send OTP via Email
+            $this->serviceFunction->sendOtpEmail($request->email, $otp, 'registration');
+
+            // Mask email for response (show only first 3 characters and domain)
+            $emailParts = explode('@', $request->email);
+            $maskedEmail = substr($emailParts[0], 0, 3) . '***@' . $emailParts[1];
 
             return response()->json(
                 [
                     'success' => true,
-                    'data' => ['message' => 'User registered successfully']
+                    'data' => [
+                        'message' => 'Registration successful. Please verify your email with OTP.',
+                        'student_id' => $student->id,
+                        'email' => $maskedEmail
+                    ]
                 ],
                 201
             );
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation Error',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation Error',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            Log::error('Student Registration Error: ' . $e->getMessage());
+            Log::error('Stack Trace: ' . $e->getTraceAsString());
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ], 500);
+        }
+    }
+
+    public function verifyStudentOtp(Request $request)
+    {
+        try {
+            $request->validate([
+                'student_id' => 'required|integer|exists:stp_students,id',
+                'otp' => 'required|integer|digits:6'
+            ]);
+
+            $student = stp_student::find($request->student_id);
+
+            if (!$student) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Student not found'
+                ], 404);
+            }
+
+            // Check if OTP is already verified
+            if ($student->otp_status == 1) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'OTP already verified'
+                ], 400);
+            }
+
+            // Check if OTP matches
+            if ($student->otp != $request->otp) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid OTP. Please try again.'
+                ], 400);
+            }
+
+            // Check if OTP is expired
+            $currentTime = now()->setTimezone('Asia/Kuala_Lumpur');
+            $expiredTime = Carbon::parse($student->otp_expired_time)->setTimezone('Asia/Kuala_Lumpur');
+            
+            if ($currentTime->gt($expiredTime)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'OTP has expired. Please request a new one.'
+                ], 400);
+            }
+
+            // OTP is valid - mark as verified
+            $student->otp_status = 1;
+            $student->save();
+
+            // Create Sanctum token (user is now logged in)
+            $token = $student->createToken('authToken')->plainTextToken;
+
+            // Send welcome email after successful OTP verification and login is complete
+            // Email is sent synchronously after token creation to ensure it's sent
+            try {
+                $emailSent = $this->serviceFunction->sendWelcomeEmail($student->student_userName, $student->student_email);
+                if ($emailSent) {
+                    Log::info("Welcome email sent successfully after OTP verification - Student ID: {$student->id}, Email: {$student->student_email}");
+                } else {
+                    Log::warning("Welcome email sending returned false - Student ID: {$student->id}, Email: {$student->student_email}");
+                }
+            } catch (\Exception $e) {
+                // Log error but don't fail the verification process
+                Log::error("Failed to send welcome email during OTP verification - Student ID: {$student->id}, Error: " . $e->getMessage());
+                Log::error("Exception trace: " . $e->getTraceAsString());
+            }
+
+            // Get user with state_id
+            $user = stp_student::select('stp_students.*', 'stp_student_details.state_id')
+                ->leftJoin('stp_student_details', 'stp_students.id', '=', 'stp_student_details.student_id')
+                ->where('stp_students.id', $student->id)
+                ->first();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'user' => $user,
+                    'token' => $token,
+                    'message' => 'OTP verified successfully. Welcome email has been sent to your email address.'
+                ]
+            ], 200);
+
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation Error',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function resendStudentOtp(Request $request)
+    {
+        try {
+            $request->validate([
+                'student_id' => 'required|integer|exists:stp_students,id'
+            ]);
+
+            $student = stp_student::find($request->student_id);
+
+            if (!$student) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Student not found'
+                ], 404);
+            }
+
+            // Check if already verified
+            if ($student->otp_status == 1) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Student already verified'
+                ], 400);
+            }
+
+            // Generate new OTP
+            $otp = rand(100000, 999999);
+            $otpExpiredTime = now()->setTimezone('Asia/Kuala_Lumpur')->addMinutes(5)->format('Y-m-d H:i:s');
+
+            $student->otp = $otp;
+            $student->otp_expired_time = $otpExpiredTime;
+            $student->save();
+
+            // Send OTP via Email
+            $this->serviceFunction->sendOtpEmail($student->student_email, $otp, 'registration');
+
+            // Mask email for response
+            $emailParts = explode('@', $student->student_email);
+            $maskedEmail = substr($emailParts[0], 0, 3) . '***@' . $emailParts[1];
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'message' => 'OTP resent successfully. Please check your email.',
+                    'email' => $maskedEmail
+                ]
+            ], 200);
+
         } catch (ValidationException $e) {
             return response()->json([
                 'success' => false,

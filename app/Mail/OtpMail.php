@@ -14,9 +14,12 @@ class OtpMail extends Mailable
     use Queueable, SerializesModels;
 
     public $otp;
-    public function __construct($otp)
+    public $purpose;
+
+    public function __construct($otp, $purpose = 'password_reset')
     {
         $this->otp = $otp;
+        $this->purpose = $purpose;
     }
 
     /**
@@ -24,8 +27,12 @@ class OtpMail extends Mailable
      */
     public function envelope(): Envelope
     {
+        $subject = $this->purpose === 'registration' 
+            ? 'Verify your StudyPal Account - OTP Code'
+            : 'Reset your StudyPal Password';
+        
         return new Envelope(
-            subject: 'Reset your studyPal Password',
+            subject: $subject,
         );
     }
 

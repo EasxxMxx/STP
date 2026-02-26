@@ -168,15 +168,35 @@ class ServiceFunction
     public function sendWelcomeEmail($studentName, $studentEmail)
     {
         try {
+            // Validate email address
+            if (empty($studentEmail) || !filter_var($studentEmail, FILTER_VALIDATE_EMAIL)) {
+                Log::error("Invalid email address for welcome email: {$studentEmail}");
+                return false;
+            }
+
+            Log::info("Attempting to send welcome email to: {$studentEmail} for student: {$studentName}");
+            
             $data = [
                 'student_name' => $studentName,
                 'student_email' => $studentEmail,
             ];
 
+            // Send email synchronously to ensure it's sent immediately
             Mail::to($studentEmail)->send(new SendWelcomeEmail($data));
+            
+            Log::info("Welcome email sent successfully to: {$studentEmail} for student: {$studentName}");
+            Log::info("Mail driver: " . config('mail.default'));
+            Log::info("Mail from: " . config('mail.from.address'));
+            
+            return true;
         } catch (\Exception $e) {
             // Log the error but don't fail registration if email fails
             Log::error('Failed to send welcome email: ' . $e->getMessage());
+            Log::error('Welcome email error stack: ' . $e->getTraceAsString());
+            Log::error('Mail configuration - MAILER: ' . config('mail.default'));
+            Log::error('Mail configuration - FROM: ' . config('mail.from.address'));
+            Log::error('Mail configuration - HOST: ' . config('mail.mailers.smtp.host'));
+            return false;
         }
     }
 
@@ -195,6 +215,59 @@ class ServiceFunction
         } catch (\Exception $e) {
             // Log only; don't block the application flow if email fails
             Log::error('Failed to send course application confirmation: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Send OTP via SMS
+     * This is a placeholder function - replace with actual SMS service implementation
+     * 
+     * @param string $phoneNumber Full phone number with country code (e.g., +60123456789)
+     * @param int $otp The OTP code to send
+     * @return bool
+     */
+    public function sendOtpSms($phoneNumber, $otp)
+    {
+        try {
+            // TODO: Replace with actual SMS service (e.g., Twilio, Nexmo, etc.)
+            // For now, just log the OTP for development purposes
+            Log::info("SMS OTP for {$phoneNumber}: {$otp}");
+            
+            // Example implementation with HTTP client (uncomment and configure when ready):
+            /*
+            $response = Http::post('YOUR_SMS_API_ENDPOINT', [
+                'phone' => $phoneNumber,
+                'message' => "Your StudyPal OTP is: {$otp}. Valid for 5 minutes.",
+                'api_key' => env('SMS_API_KEY')
+            ]);
+            
+            return $response->successful();
+            */
+            
+            // For development, return true
+            return true;
+        } catch (\Exception $e) {
+            Log::error('Failed to send SMS OTP: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Send OTP via Email for registration
+     * 
+     * @param string $email The recipient email address
+     * @param int $otp The OTP code to send
+     * @param string $purpose The purpose of the OTP (e.g., 'registration', 'password_reset')
+     * @return bool
+     */
+    public function sendOtpEmail($email, $otp, $purpose = 'registration')
+    {
+        try {
+            Mail::to($email)->send(new OtpMail($otp, $purpose));
+            return true;
+        } catch (\Exception $e) {
+            Log::error('Failed to send OTP email: ' . $e->getMessage());
+            return false;
         }
     }
 }

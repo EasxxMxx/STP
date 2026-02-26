@@ -58,22 +58,24 @@
         </div>
         <div class="content">
             <p>Hello,</p>
-            @if($purpose === 'registration')
+            <?php if($purpose === 'registration'): ?>
                 <p>Thank you for registering with StudyPal! To complete your registration and verify your account, please use the OTP code below:</p>
-            @else
+            <?php else: ?>
                 <p>We received a request to reset your password. Please use the OTP code below to proceed with the resetting password process:</p>
-            @endif
+            <?php endif; ?>
             <div class="otp-code">
-                {{ $otp }}
+                <?php echo e($otp); ?>
+
             </div>
             <p>This code will expire in 5 minutes. If you did not request this OTP, please ignore this email or contact our support team immediately.</p>
             <p>For your security, never share your OTP with anyone.</p>
         </div>
         <div class="footer">
             <p>Thank you,</p>
-            <p><strong>{{ config('app.name') }}</strong></p>
+            <p><strong><?php echo e(config('app.name')); ?></strong></p>
             <p>This is an automated message, please do not reply.</p>
         </div>
     </div>
 </body>
 </html>
+<?php /**PATH C:\xamppp\htdocs\studypal1\STP\resources\views/emails/otp.blade.php ENDPATH**/ ?>

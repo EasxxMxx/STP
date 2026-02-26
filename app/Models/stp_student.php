@@ -32,7 +32,10 @@ class stp_student extends Authenticatable
         'google_id',
         'terms_agreed',
         'terms_agreed_at',
-        'updated_by'
+        'updated_by',
+        'otp',
+        'otp_expired_time',
+        'otp_status'
     ];
 
     public function role()

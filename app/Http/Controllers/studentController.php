@@ -4928,6 +4928,9 @@ class studentController extends Controller
                 ], 404);
             }
 
+            // Increment article_views in stp_article table
+            $article->increment('article_views');
+
             // Check if visit record exists for today
             $validateExistData = stp_article_visit::where('article_id', $articleId)
                 ->whereDay('created_at', \Carbon\Carbon::now()->day)

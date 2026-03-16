@@ -202,12 +202,12 @@ class AuthController extends Controller
                 ]);
             }
 
-            // Check if OTP is verified (only allow login for verified users)
-            if ($user->otp_status != 1) {
-                throw ValidationException::withMessages([
-                    'otp' => ['Please verify your phone number with OTP before logging in.'],
-                ]);
-            }
+            // // Check if OTP is verified (only allow login for verified users)
+            // if ($user->otp_status != 1) {
+            //     throw ValidationException::withMessages([
+            //         'otp' => ['Please verify your phone number with OTP before logging in.'],
+            //     ]);
+            // }
 
             // Auth::login($user);
 
@@ -464,9 +464,9 @@ class AuthController extends Controller
                 ]);
             }
 
-            // Generate OTP
-            $otp = rand(100000, 999999);
-            $otpExpiredTime = now()->setTimezone('Asia/Kuala_Lumpur')->addMinutes(5)->format('Y-m-d H:i:s');
+            // // Generate OTP
+            // $otp = rand(100000, 999999);
+            // $otpExpiredTime = now()->setTimezone('Asia/Kuala_Lumpur')->addMinutes(5)->format('Y-m-d H:i:s');
             
             $checkEmailWithSocialLogin = stp_student::where('student_email', $request->email)
                 ->whereNull('student_password')
@@ -480,9 +480,9 @@ class AuthController extends Controller
                     'student_nationality' => $request->student_nationality,
                     'student_password' => Hash::make($request->password),
                     'student_icNumber' => $request->ic,
-                    'otp' => $otp,
-                    'otp_expired_time' => $otpExpiredTime,
-                    'otp_status' => 0 // Not verified yet
+                    // 'otp' => $otp,
+                    // 'otp_expired_time' => $otpExpiredTime,
+                    'otp_status' => 1 // Verified by default
                 ];
                 $checkEmailWithSocialLogin->update($data);
                 $student = $checkEmailWithSocialLogin;
@@ -496,9 +496,9 @@ class AuthController extends Controller
                     'student_password' => Hash::make($request->password),
                     'student_icNumber' => $request->ic,
                     'user_role' => 4,
-                    'otp' => $otp,
-                    'otp_expired_time' => $otpExpiredTime,
-                    'otp_status' => 0 // Not verified yet
+                    // 'otp' => $otp,
+                    // 'otp_expired_time' => $otpExpiredTime,
+                    'otp_status' => 1 // Verified by default
                 ];
                 $student = stp_student::create($data);
                 $userdetail = stp_student_detail::create([
@@ -506,20 +506,16 @@ class AuthController extends Controller
                 ]);
             }
 
-            // Send OTP via Email
-            $this->serviceFunction->sendOtpEmail($request->email, $otp, 'registration');
-
-            // Mask email for response (show only first 3 characters and domain)
-            $emailParts = explode('@', $request->email);
-            $maskedEmail = substr($emailParts[0], 0, 3) . '***@' . $emailParts[1];
+            // // Send OTP via Email
+            // $this->serviceFunction->sendOtpEmail($request->email, $otp, 'registration');
 
             return response()->json(
                 [
                     'success' => true,
                     'data' => [
-                        'message' => 'Registration successful. Please verify your email with OTP.',
+                        'message' => 'Registration successful.',
                         'student_id' => $student->id,
-                        'email' => $maskedEmail
+                        'email' => $request->email
                     ]
                 ],
                 201

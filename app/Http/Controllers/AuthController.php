@@ -482,7 +482,7 @@ class AuthController extends Controller
                     'student_icNumber' => $request->ic,
                     // 'otp' => $otp,
                     // 'otp_expired_time' => $otpExpiredTime,
-                    'otp_status' => 1 // Verified by default
+                    // 'otp_status' => 1 // Verified by default
                 ];
                 $checkEmailWithSocialLogin->update($data);
                 $student = $checkEmailWithSocialLogin;
@@ -498,7 +498,7 @@ class AuthController extends Controller
                     'user_role' => 4,
                     // 'otp' => $otp,
                     // 'otp_expired_time' => $otpExpiredTime,
-                    'otp_status' => 1 // Verified by default
+                    // 'otp_status' => 1 // Verified by default
                 ];
                 $student = stp_student::create($data);
                 $userdetail = stp_student_detail::create([

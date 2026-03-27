@@ -85,6 +85,8 @@ Route::prefix('student')->group(function () {
     Route::post('/trendingArticlesByCategory', [studentController::class, 'trendingArticlesByCategory']);
     Route::post('/featuredArticlesByCategory', [studentController::class, 'featuredArticlesByCategory']);
     Route::post('/articleDetail', [studentController::class, 'articleDetail']);
+    Route::post('/articleDetailBySlug', [studentController::class, 'articleDetailBySlug']);
+    Route::post('/generateArticleSlug', [studentController::class, 'generateArticleSlug']);
     Route::post('/articlesByCategory', [studentController::class, 'articlesByCategory']);
 
     // Newsletter Subscription Route

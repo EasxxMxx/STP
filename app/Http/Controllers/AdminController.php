@@ -71,6 +71,39 @@ class AdminController extends Controller
     }
 
     /**
+     * Generate a unique article slug from provided slug
+     * Mirrors the logic in studentController::generateArticleSlug
+     */
+    // private function generateArticleSlug(string $slug): string
+    // {
+    //     $baseSlug = strtolower($slug);
+    //     $baseSlug = preg_replace('/[^a-z0-9]+/', '-', $baseSlug);
+    //     $baseSlug = trim($baseSlug, '-');
+
+    //     if (empty($baseSlug)) {
+    //         $baseSlug = 'article';
+    //     }
+
+    //     $existingSlugs = array_flip(
+    //         stp_article::where(function ($query) use ($baseSlug) {
+    //             $query->where('article_slug', $baseSlug)
+    //                   ->orWhere('article_slug', 'LIKE', $baseSlug . '-%');
+    //         })->pluck('article_slug')->toArray()
+    //     );
+
+    //     if (!isset($existingSlugs[$baseSlug])) {
+    //         return $baseSlug;
+    //     }
+
+    //     $count = 2;
+    //     while (isset($existingSlugs[$baseSlug . '-' . $count])) {
+    //         $count++;
+    //     }
+
+    //     return $baseSlug . '-' . $count;
+    // }
+
+    /**
      * Convert image to WebP format
      * 
      * @param string|object $imageSource - File path, uploaded file, or binary image data
@@ -8387,6 +8420,7 @@ class AdminController extends Controller
         try {
             $request->validate([
                 'title' => 'required|string|max:255',
+                'slug' => 'required|string|max:255',
                 'category' => 'required|integer|exists:stp_article_category,id',
                 'author' => 'required|string|max:255',
                 'featuredImage' => 'required|image|mimes:jpeg,png,jpg|max:2048',
@@ -8402,6 +8436,9 @@ class AdminController extends Controller
 
             $authUser = Auth::user();
 
+            // Generate slug from provided slug to ensure its not malformed
+            // $slug = $this->generateArticleSlug($request->slug);
+
             // Handle featured image upload - save to public/storage and convert to WebP
             $featuredImagePath = null;
             if ($request->hasFile('featuredImage')) {
@@ -8416,6 +8453,7 @@ class AdminController extends Controller
             $article = stp_article::create([
                 "category_id" => $request->category,
                 "article_title" => $request->title,
+                "article_slug" => $request->slug,
                 "article_author" => $request->author,
                 "article_date" => now()->toDateString(),
                 "article_featured" => $request->has('articleFeatured') && ($request->articleFeatured === '1' || $request->articleFeatured === true || $request->articleFeatured === 'true') ? 1 : 0,
@@ -8570,6 +8608,7 @@ class AdminController extends Controller
             $request->validate([
                 'id' => 'required|integer',
                 'title' => 'required|string|max:255',
+                'slug' => 'required|string|max:255',
                 'category' => 'required|integer|exists:stp_article_category,id',
                 'author' => 'required|string|max:255',
                 'featuredImage' => 'nullable|image|mimes:jpeg,png,jpg|max:2048',
@@ -8865,6 +8904,7 @@ class AdminController extends Controller
             $updateData = [
                 'category_id' => $request->category,
                 'article_title' => $request->title,
+                'article_slug' => $request->slug,
                 'article_author' => $request->author,
                 'article_featured_image' => $featuredImagePath,
                 'article_featured' => $request->has('articleFeatured') && ($request->articleFeatured === '1' || $request->articleFeatured === true || $request->articleFeatured === 'true') ? 1 : 0,
@@ -9047,6 +9087,7 @@ class AdminController extends Controller
                 'data' => [
                     'id' => $article->id,
                     'title' => $article->article_title,
+                    'slug' => $article->article_slug,
                     'category_id' => $article->category_id,
                     'author' => $article->article_author,
                     'featured_image' => $featuredImageUrl,

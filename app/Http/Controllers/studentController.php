@@ -5098,6 +5098,7 @@ class studentController extends Controller
                 'data' => [
                     'id' => $article->id,
                     'title' => $article->article_title,
+                    'slug' => $article->article_slug,
                     'category_id' => $article->category_id,
                     'category_name' => $article->category ? $article->category->category_name : 'Uncategorized',
                     'author' => $article->article_author,
@@ -5114,6 +5115,205 @@ class studentController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    public function articleDetailBySlug(Request $request)
+    {
+        try {
+            $request->validate([
+                'slug' => 'required|string'
+            ]);
+            
+            // Fetch article with category and content images, only active articles
+            $article = stp_article::with(['category', 'contentImages'])
+                ->where('article_slug', $request->slug)
+                ->where('data_status', 1)
+                ->first();
+
+            if (!$article) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article not found or inactive'
+                ], 404);
+            }
+
+            // Generate URLs for files in public/storage
+            $featuredImageUrl = null;
+            if ($article->article_featured_image) {
+                $baseUrl = url('/');
+                $featuredImageUrl = rtrim($baseUrl, '/') . '/storage/' . ltrim($article->article_featured_image, '/');
+            }
+
+            // Read article content from file - from public/storage
+            $articleContent = '';
+            if ($article->article_content && file_exists(public_path('storage/' . $article->article_content))) {
+                $articleContent = file_get_contents(public_path('storage/' . $article->article_content));
+            }
+
+            // URL-decode the content to handle URL-encoded placeholders (e.g., %5BIMAGE_ID:16%5D -> [IMAGE_ID:16])
+            $articleContent = urldecode($articleContent);
+
+            // Get content images with URLs - from public/storage
+            // Load images separately to ensure they're loaded correctly
+            $contentImages = stp_article_content_image::where('article_id', $article->id)
+                ->where('data_status', 1)
+                ->orderBy('id')
+                ->get()
+                ->filter(function ($image) {
+                    return !empty($image->image_path);
+                })
+                ->map(function ($image) {
+                    $baseUrl = url('/');
+                    return [
+                        'id' => $image->id,
+                        'url' => rtrim($baseUrl, '/') . '/storage/' . ltrim($image->image_path, '/'),
+                        'path' => $image->image_path,
+                        'alt' => $image->image_alt ?? ''
+                    ];
+                })
+                ->values();
+
+            // Replace image placeholders in HTML with actual image URLs
+            // Use a comprehensive approach: regex for img tags + string replace as fallback
+            foreach ($contentImages as $image) {
+                $placeholder = '[IMAGE_ID:' . $image['id'] . ']';
+                $imageUrl = $image['url'];
+                
+                // Also handle URL-encoded version of placeholder
+                $encodedPlaceholder = urlencode($placeholder);
+                
+                // Escape the placeholder for regex (brackets are special characters)
+                $escapedPlaceholder = preg_quote($placeholder, '/');
+                $escapedEncodedPlaceholder = preg_quote($encodedPlaceholder, '/');
+                
+                // Method 1: Replace in img src attributes with double quotes (most common)
+                // Handles: <img src="[IMAGE_ID:14]"> or <img ... src="[IMAGE_ID:14]">
+                // Also handles URL-encoded: <img src="%5BIMAGE_ID:14%5D">
+                $articleContent = preg_replace(
+                    '/(<img[^>]*\s+src=["])(' . $escapedPlaceholder . '|' . $escapedEncodedPlaceholder . ')(["][^>]*>)/i',
+                    '$1' . $imageUrl . '$3',
+                    $articleContent
+                );
+                
+                // Method 2: Replace in img src attributes with single quotes
+                // Handles: <img src='[IMAGE_ID:14]'> or <img ... src='[IMAGE_ID:14]'>
+                $articleContent = preg_replace(
+                    '/(<img[^>]*\s+src=[\'])(' . $escapedPlaceholder . '|' . $escapedEncodedPlaceholder . ')([\'][^>]*>)/i',
+                    '$1' . $imageUrl . '$3',
+                    $articleContent
+                );
+                
+                // Method 3: Replace in img src attributes without quotes (edge case)
+                // Handles: <img src=[IMAGE_ID:14]> or <img ... src=[IMAGE_ID:14]>
+                $articleContent = preg_replace(
+                    '/(<img[^>]*\s+src=)(' . $escapedPlaceholder . '|' . $escapedEncodedPlaceholder . ')([\s>])/i',
+                    '$1' . $imageUrl . '$3',
+                    $articleContent
+                );
+                
+                // Method 4: Replace anywhere in the content (catches any edge cases)
+                // This is the most reliable fallback - handles both encoded and non-encoded
+                $articleContent = str_replace($placeholder, $imageUrl, $articleContent);
+                $articleContent = str_replace($encodedPlaceholder, $imageUrl, $articleContent);
+            }
+            
+            // Remove any remaining placeholders for images with data_status = 0
+            // This handles cases where old HTML files might still have placeholders for deleted images
+            $deletedImageIds = stp_article_content_image::where('article_id', $article->id)
+                ->where('data_status', 0)
+                ->pluck('id')
+                ->toArray();
+            
+            foreach ($deletedImageIds as $deletedId) {
+                $placeholder = '[IMAGE_ID:' . $deletedId . ']';
+                // Remove img tags that contain the deleted image placeholder in src attribute
+                $articleContent = preg_replace('/<img[^>]*src=["\'][^"\']*' . preg_quote($placeholder, '/') . '[^"\']*["\']*[^>]*>/i', '', $articleContent);
+            }
+
+            // Format date
+            $formattedDate = \Carbon\Carbon::parse($article->article_date)->format('F j, Y');
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $article->id,
+                    'title' => $article->article_title,
+                    'category_id' => $article->category_id,
+                    'category_name' => $article->category ? $article->category->category_name : 'Uncategorized',
+                    'author' => $article->article_author,
+                    'date' => $formattedDate,
+                    'featured_image' => $featuredImageUrl,
+                    'content' => $articleContent,
+                    'content_images' => $contentImages
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function generateArticleSlug(Request $request)
+    {
+      try {
+          $request->validate([
+              'title' => 'required|string',
+              'articleId' => 'nullable|integer'
+          ]);
+
+          $articleId = $request->articleId ?? null;
+          $baseSlug = $request->title;
+
+          // Convert to lowercase
+          $baseSlug = strtolower($baseSlug);
+
+          // Replace non-alphanumeric characters with dashes
+          $baseSlug = preg_replace('/[^a-z0-9]+/', '-', $baseSlug);
+
+          // Remove leading/trailing dashes
+          $baseSlug = trim($baseSlug, '-');
+
+          if (empty($baseSlug)) {
+              $baseSlug = 'article';
+          }
+
+          $existingSlugs = array_flip(
+              stp_article::where(function ($query) use ($baseSlug) {
+                  $query->where('article_slug', $baseSlug)
+                        ->orWhere('article_slug', 'LIKE', $baseSlug . '-%');
+              })
+              ->when($articleId, function ($query) use ($articleId) {
+                  $query->where('id', '!=', $articleId); // exclude itself
+              })
+              ->pluck('article_slug')
+              ->toArray()
+          );
+
+          if (!isset($existingSlugs[$baseSlug])) {
+              $slug = $baseSlug;
+          } else {
+              $count = 2;
+              while (isset($existingSlugs[$baseSlug . '-' . $count])) {
+                  $count++;
+              }
+              $slug = $baseSlug . '-' . $count;
+          }
+
+          return response()->json([
+              'success' => true,
+              'slug' => $slug
+          ]);
+
+      } catch (\Exception $e) {
+          return response()->json([
+              'success' => false,
+              'message' => 'Internal Server Error',
+              'error' => $e->getMessage()
+          ], 500);
+      }
     }
 
     /**
@@ -5790,6 +5990,7 @@ class studentController extends Controller
                     'author' => $article->article_author,
                     'date' => $formattedDate,
                     'title' => $article->article_title,
+                    'slug' => $article->article_slug,
                     'featuredImage' => $featuredImageUrl,
                     'commentCount' => 0 // Hardcoded as requested
                 ];
@@ -5939,6 +6140,7 @@ class studentController extends Controller
                     'author' => $article->article_author,
                     'date' => $formattedDate,
                     'title' => $article->article_title,
+                    'slug' => $article->article_slug,
                     'featuredImage' => $featuredImageUrl,
                     'commentCount' => 0
                 ];
@@ -5964,6 +6166,7 @@ class studentController extends Controller
                     'author' => $article->article_author,
                     'date' => $formattedDate,
                     'title' => $article->article_title,
+                    'slug' => $article->article_slug,
                     'featuredImage' => $featuredImageUrl,
                     'commentCount' => 0
                 ];
@@ -6038,6 +6241,7 @@ class studentController extends Controller
                     'date' => $formattedDate,
                     'commentCount' => 0,
                     'title' => $featuredArticle->article_title,
+                    'slug' =>$featuredArticle->article_slug,
                     'excerpt' => null // Featured articles don't have excerpt
                 ];
 
@@ -6099,6 +6303,7 @@ class studentController extends Controller
                         'id' => $article->id,
                         'isFeatured' => false,
                         'image' => $featuredImageUrl,
+                        'slug' => $article->article_slug,
                         'category' => strtoupper($categoryName),
                         'author' => $article->article_author,
                         'date' => $formattedDate,
@@ -6169,6 +6374,7 @@ class studentController extends Controller
                     'id' => $article->id,
                     'image' => $featuredImageUrl,
                     'title' => $article->article_title,
+                    'slug' => $article->article_slug,
                     'author' => $article->article_author,
                     'date' => $formattedDate,
                     'category' => strtoupper($categoryName),
@@ -6206,6 +6412,7 @@ class studentController extends Controller
                     'a.id',
                     'a.article_title',
                     'a.article_author',
+                    'a.article_slug',
                     'a.article_date',
                     'a.article_featured_image',
                     'c.category_name',
@@ -6215,6 +6422,7 @@ class studentController extends Controller
                     'a.id',
                     'a.article_title',
                     'a.article_author',
+                    'a.article_slug',
                     'a.article_date',
                     'a.article_featured_image',
                     'c.category_name'
@@ -6250,6 +6458,7 @@ class studentController extends Controller
                     'category' => strtoupper($categoryName),
                     'author' => $row->article_author,
                     'date' => $formattedDate,
+                    'slug' => $row->article_slug,
                     // Comment count is hardcoded for now as requested
                     'commentCount' => 0,
                 ];
@@ -6301,6 +6510,7 @@ class studentController extends Controller
                 ->select(
                     'a.id',
                     'a.article_title',
+                    'a.article_slug',
                     'a.article_author',
                     'a.article_date',
                     'a.article_featured_image',
@@ -6310,6 +6520,7 @@ class studentController extends Controller
                 ->groupBy(
                     'a.id',
                     'a.article_title',
+                    'a.article_slug',
                     'a.article_author',
                     'a.article_date',
                     'a.article_featured_image',
@@ -6345,6 +6556,7 @@ class studentController extends Controller
                     'title' => $row->article_title,
                     'category' => strtoupper($categoryName),
                     'author' => $row->article_author,
+                    'slug' => $row->article_slug,
                     'date' => $formattedDate,
                     // Comment count is hardcoded for now as requested
                     'commentCount' => 0,
@@ -6426,6 +6638,7 @@ class studentController extends Controller
                     'date' => $formattedDate,
                     'category' => strtoupper($categoryName),
                     'excerpt' => $excerpt,
+                    'slug' => $article->article_slug,
                     // Keep hardcoded for now as requested
                     'commentCount' => 0,
                 ];
@@ -6509,6 +6722,7 @@ class studentController extends Controller
                     'author' => $featuredArticle->article_author,
                     'date' => $formattedDate,
                     'title' => $featuredArticle->article_title,
+                    'slug' => $featuredArticle->article_slug,
                     'featuredImage' => $featuredImageUrl,
                     'commentCount' => 0, // Hardcoded as requested
                     'mainPoint1' => $featuredArticle->article_main_points_1 ?? '',
@@ -6556,6 +6770,7 @@ class studentController extends Controller
                 return [
                     'id' => $article->id,
                     'title' => $article->article_title,
+                    'slug' => $article->article_slug,
                     'author' => $article->article_author,
                     'date' => $formattedDate,
                     'featuredImage' => $imageUrl

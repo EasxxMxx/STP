@@ -14,6 +14,7 @@ class stp_article extends Model
     protected $fillable = [
         "category_id",
         "article_title",
+        "article_slug",
         "article_author",
         "article_date",
         "article_featured",

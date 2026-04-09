@@ -39,10 +39,12 @@ Route::prefix('student')->group(function () {
     Route::post('/schoolList', [studentController::class, 'schoolList']);
     Route::post('/schoolListForDropdown', [studentController::class, 'schoolListForDropdown']);
     Route::post('/schoolDetail', [studentController::class, 'schoolDetail']);
+    Route::post('/schoolDetailBySlug', [studentController::class, 'schoolDetailBySlug']);
     Route::post('/categoryList', [studentController::class, 'categoryList']);
     Route::post('/courseList', [studentController::class, 'courseList']);
 
     Route::post('/courseDetail', [studentController::class, 'courseDetail']);
+    Route::post('/courseDetailBySlug', [studentController::class, 'courseDetailBySlug']);
     Route::post('/otherCoursesFromUniversity', [studentController::class, 'otherCoursesFromUniversity']);
     Route::post('/coursesMightInterested', [studentController::class, 'coursesMightInterested']);
 
@@ -509,3 +511,11 @@ Route::middleware('auth:sanctum')->get('/test6', [AdminController::class, 'stude
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
+
+// Sitemap routes
+Route::get('/sitemap-universities.xml', [studentController::class, 'universitiesSitemap']);
+Route::get('/sitemap-courses.xml', [studentController::class, 'coursesSitemap']);
+
+// Utility routes to generate slugs for existing records (remove after use)
+Route::get('/generate-slugs-for-existing-schools', [SchoolController::class, 'generateSlugForExisting']);
+Route::get('/generate-slugs-for-existing-courses', [SchoolController::class, 'generateCourseSlugForExisting']);

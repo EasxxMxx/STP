@@ -484,6 +484,161 @@ class studentController extends Controller
         }
     }
 
+    public function courseDetailBySlug(Request $request)
+    {
+        try {
+            $request->validate([
+                'schoolSlug' => 'required|string',
+                'courseSlug' => 'required|string'
+            ]);
+
+            // Query using slugs instead of IDs/names
+            $courseList = stp_course::where('course_slug', $request->courseSlug)
+                ->whereHas('school', function ($query) use ($request) {
+                    $query->where('school_slug', $request->schoolSlug);
+                })
+                ->with(['school', 'school.country', 'school.institueCategory', 'category', 'tag.tag', 'qualification', 'studyMode', 'featured.featured', 'intake.month'])
+                ->first();
+
+            if (!$courseList) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Course not found'
+                ], 404);
+            }
+
+            if (empty($courseList->course_logo)) {
+                $logo = $courseList->school->school_logo;
+            } else {
+                $logo = $courseList->course_logo;
+            }
+
+            $courseTag = $courseList->tag;
+            $tagList = [];
+            foreach ($courseTag as $tag) {
+                $tagList[] = [
+                    "id" => $tag->tag['id'],
+                    "tagName" => $tag->tag['tag_name']
+                ];
+            }
+            // Fetch all intakes associated with the course
+            $intakeList = [];
+
+            foreach ($courseList->intake as $intake) {
+                if ($intake->intake_status == 1) {
+                    $intakeList[] = $intake->month->core_metaName;
+                }
+            }
+            $featuredList = [];
+            foreach ($courseList->featured as $courseFeatured) {
+                $featuredList[] = $courseFeatured->featured->id;
+            }
+
+            $coverPhoto = null;
+            $schoolPhoto = null;
+            foreach ($courseList->school->media as $photo) {
+                if ($photo->schoolMedia_type == 66) {
+                    $coverPhoto = $photo->schoolMedia_location;
+                    break;
+                }
+            }
+
+            foreach ($courseList->school->media as $photo) {
+
+                if ($photo->schoolMedia_type == 67) {
+                    $schoolPhoto[] = $photo->schoolMedia_location;
+                }
+            }
+
+
+
+            // Free education schemes (school + course)
+            $schoolFreeEducationSchemes = stp_school_free_education::where('school_id', $courseList->school->id)
+                ->where('stp_school_free_education.data_status', 1)
+                ->join('stp_free_education', 'stp_school_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->select(
+                    'stp_free_education.id',
+                    'stp_free_education.scheme_name',
+                    'stp_free_education.text_color_code',
+                    'stp_free_education.background_color_code',
+                    'stp_free_education.data_status'
+                )
+                ->get()
+                ->map(function ($scheme) {
+                    return [
+                        'id' => (int) $scheme->id,
+                        'scheme_name' => $scheme->scheme_name,
+                        'text_color_code' => $scheme->text_color_code,
+                        'background_color_code' => $scheme->background_color_code,
+                        'data_status' => (int) $scheme->data_status,
+                    ];
+                })
+                ->toArray();
+
+            $courseFreeEducationSchemes = stp_course_free_education::where('course_id', $courseList->id)
+                ->where('stp_course_free_education.data_status', 1)
+                ->join('stp_free_education', 'stp_course_free_education.free_education_id', '=', 'stp_free_education.id')
+                ->select(
+                    'stp_free_education.id',
+                    'stp_free_education.scheme_name',
+                    'stp_free_education.data_status'
+                )
+                ->get()
+                ->map(function ($scheme) {
+                    return [
+                        'id' => (int) $scheme->id,
+                        'scheme_name' => $scheme->scheme_name,
+                        'data_status' => (int) $scheme->data_status,
+                    ];
+                })
+                ->toArray();
+
+            $courseListDetail = [
+                'id' => $courseList->id,
+                'course' => $courseList->course_name,
+                'description' => $courseList->course_description,
+                'requirement' => $courseList->course_requirement,
+                'cost' => number_format($courseList->course_cost),
+                'international_cost' => number_format($courseList->international_cost),
+                'country' => $courseList->school->country->country_name ?? null,
+                'country_code' => $courseList->school->country->country_code ?? null,
+                'period' => $courseList->course_period,
+                'intake' => $intakeList, // Updated to include all intakes
+                'courseFeatured' => $featuredList,
+                'category' => $courseList->category->category_name,
+                'category_id' => $courseList->category_id,
+                'school' => $courseList->school->school_name,
+                'schoolShortDescription' => $courseList->school->school_shortDesc,
+                'schoolLongDescription' => $courseList->school->school_fullDesc,
+                'schoolCategory' => $courseList->school->institueCategory->core_metaName,
+                'schoolEmail' => $courseList->school->school_email,
+                'schoolID' => $courseList->school_id,
+                'schoolLocation' => $courseList->school->school_location ?? null,
+                'google_map_location' => $courseList->school->school_google_map_location ?? null,
+                'qualification' => $courseList->qualification->qualification_name,
+                'mode' => $courseList->studyMode->core_metaName ?? null,
+                'logo' => $logo,
+                'coverPhoto' => $coverPhoto ?? null,
+                'schoolPhoto' => $schoolPhoto ?? null,
+                'tag' => $tagList,
+                'school_free_education_schemes' => $schoolFreeEducationSchemes,
+                'course_free_education_schemes' => $courseFreeEducationSchemes,
+            ];
+
+            return response()->json([
+                'success' => true,
+                'data' => $courseListDetail
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
+
+
     public function courseDetail(Request $request)
     {
 
@@ -644,6 +799,173 @@ class studentController extends Controller
         }
     }
 
+    public function schoolDetailBySlug(Request $request)
+    {
+        try {
+            $request->validate([
+                'slug' => 'required|string'
+            ]);
+
+            // Query using slug instead of ID
+            $school = stp_school::with(['courses.featured', 'courses.category', 'courses.qualification', 'courses.studyMode', 'courses.intake.month', 'country', 'institueCategory', 'state', 'city'])
+                ->where('school_slug', $request->slug)
+                ->first();
+
+            if (!$school) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'School not found'
+                ], 404);
+            }
+
+            $courses = $school->courses;
+
+            $schoolCover = stp_school_media::where('school_id', $school->id)
+                ->where('schoolMedia_type', 66)
+                ->where('schoolMedia_status', 1)
+                ->first();
+
+            $schoolPhoto = stp_school_media::where('school_id', $school->id)
+                ->where('schoolMedia_type', 67)
+                ->where('schoolMedia_status', 1)
+                ->get();
+
+            $intake = [];
+            $monthsOrder = [
+                'January' => 1,
+                'February' => 2,
+                'March' => 3,
+                'April' => 4,
+                'May' => 5,
+                'June' => 6,
+                'July' => 7,
+                'August' => 8,
+                'September' => 9,
+                'October' => 10,
+                'November' => 11,
+                'December' => 12
+            ];
+
+            foreach ($courses as $c) {
+                $months = $c->intake->pluck('month.core_metaName')->toArray();
+                if (!empty($months)) {
+                    $intake = array_merge($intake, $months);
+                }
+            }
+
+            // Convert month names to numbers using the $monthsOrder mapping
+            $intakeNumeric = array_map(function ($month) use ($monthsOrder) {
+                return $monthsOrder[$month] ?? 13; // Default to 13 if month is not found
+            }, $intake);
+
+            // Sort the numeric months
+            sort($intakeNumeric);
+
+            // Convert the numeric months back to month names
+            $sortedIntake = array_map(function ($monthNumber) use ($monthsOrder) {
+                return array_flip($monthsOrder)[$monthNumber];
+            }, $intakeNumeric);
+
+
+            $intakeMonth = array_values(array_unique($sortedIntake));
+            $coursesList = $school->courses
+                ->makeHidden('intake')
+                ->map(function ($course) {
+                    if ($course->course_status != 0) {
+                        $monthList = [];
+                        foreach ($course->intake as $m) {
+                            $monthList[] = $m->month->core_metaName;
+                        }
+                        $monthOrder = [
+                            'January' => 1,
+                            'February' => 2,
+                            'March' => 3,
+                            'April' => 4,
+                            'May' => 5,
+                            'June' => 6,
+                            'July' => 7,
+                            'August' => 8,
+                            'September' => 9,
+                            'October' => 10,
+                            'November' => 11,
+                            'December' => 12
+                        ];
+
+                        // Sort months according to the predefined order
+                        usort($monthList, function ($a, $b) use ($monthOrder) {
+                            return $monthOrder[$a] - $monthOrder[$b];
+                        });
+
+                        // Check if course is featured (featured_type = 30, active featured status)
+                        $isFeatured = $course->featured->contains(function ($featured) {
+                            return $featured->featured_type == 30
+                                && $featured->featured_status == 1
+                                && $featured->featured_startTime < now()
+                                && $featured->featured_endTime > now();
+                        });
+
+                        return [
+                            'id' => $course->id,
+                            'course_name' => $course->course_name,
+                            'course_slug' => $course->course_slug,
+                            'school_slug' => $course->school->school_slug,
+                            'course_cost' => number_format($course->course_cost),
+                            'international_cost' => number_format($course->international_cost),
+                            'course_period' => $course->course_period,
+                            'course_intake' => $monthList,
+                            'category' => $course->category->category_name,
+                            'qualification' => $course->qualification->qualification_name,
+                            'study_mode' => $course->studyMode->core_metaName ?? null,
+                            'course_logo' => $course->course_logo,
+                            'featured' => $isFeatured
+                        ];
+                    }
+                    return null;
+                })
+                ->filter() // Removes null values
+                ->values();
+
+            $schoolDetail = [
+                'id' => $school->id,
+                'school_slug' => $school->school_slug,
+                'name' => $school->school_name,
+                'school_email' => $school->school_email,
+                'school_contactNo' => $school->school_contactNo ?? null,
+                'school_countryCode' => $school->school_countryCode ?? null,
+                'person_inChargeEmail' => $school->person_inChargeEmail ?? null,
+                'category' => $school->institueCategory->core_metaName ?? null,
+                'logo' => $school->school_logo,
+                'country' => $school->country->country_name ?? null,
+                'country_code' => $school->country->country_code ?? null,
+                'state' => $school->state->state_name ?? null,
+                'city' => $school->city->city_name ?? null,
+                'short_description' => $school->school_shortDesc,
+                'long_description' => $school->school_fullDesc,
+                'school_lg' => $school->school_lg,
+                'school_lat' => $school->school_lat,
+                'number_courses' => count($school->courses),
+                'google_map_location' => $school->school_google_map_location,
+                'school_website' => $school->school_officalWebsite ?? null,
+                'courses' => $coursesList,
+                'month' => $intakeMonth,
+                'school_cover' => $schoolCover,
+                'school_photo' => $schoolPhoto,
+                'location' => $school->school_location
+            ];
+
+            return response()->json([
+                'success' => true,
+                'data' => $schoolDetail
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Internal Server Error',
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
+
     public function schoolDetail(Request $request)
     {
         try {
@@ -751,6 +1073,8 @@ class studentController extends Controller
                         return [
                             'id' => $course->id,
                             'course_name' => $course->course_name,
+                            'course_slug' => $course->course_slug,
+                            'school_slug' => $course->school->school_slug,
                             'course_cost' => number_format($course->course_cost),
                             'international_cost' => number_format($course->international_cost),
                             'course_period' => $course->course_period,
@@ -772,6 +1096,7 @@ class studentController extends Controller
 
             $schoolDetail = [
                 'id' => $school->id,
+                'school_slug' => $school->school_slug,
                 'name' => $school->school_name,
                 'school_email' => $school->school_email,
                 'school_contactNo' => $school->school_contactNo ?? null,
@@ -892,6 +1217,8 @@ class studentController extends Controller
                     return [
                         "id" => $courses->courses->id,
                         "school_id" => $courses->courses->school->id,
+                        "school_slug" => $courses->courses->school->school_slug,
+                        "course_slug" => $courses->courses->course_slug,
                         "course_name" => $courses->courses->course_name,
                         "course_logo" => $logo,
                         "course_qualification" => $courses->courses->qualification->qualification_name,
@@ -1214,9 +1541,11 @@ class studentController extends Controller
 
                 return [
                     'school_id' => $course->school->id,
+                    'school_slug' => $course->school->school_slug,
                     'email' => $course->school->school_email,
                     'school_cover' => $coverPhoto,
                     'id' => $course->id,
+                    'course_slug' => $course->course_slug,
                     'school_name' => $course->school->school_name,
                     'name' => $course->course_name,
                     'description' => $course->course_description,
@@ -4617,7 +4946,9 @@ class studentController extends Controller
                 return [
                     'id' => $interestedCourse->id,
                     'course_id' => $interestedCourse->course->id,
+                    'course_slug' => $interestedCourse->course->course_slug,
                     'school_id' => $interestedCourse->course->school->id,
+                    'school_slug' => $interestedCourse->course->school->school_slug,
                     'name' => $interestedCourse->course->course_name,
                     'school_name' => $interestedCourse->course->school->school_name,
                     'email' => $interestedCourse->course->school->school_email,
@@ -4847,18 +5178,19 @@ class studentController extends Controller
     {
         try {
             $request->validate([
-                'school_id' => 'integer'
+                'slug' => 'required|string'
             ]);
 
-            if (!empty($request->school_id)) {
-                $schoolId = $request->school_id;
-            } else {
-                $request->validate([
-                    'school_name' => 'required|string'
-                ]);
-                $school = stp_school::where('school_name', $request->school_name)->get()->first();
-                $schoolId = $school->id;
+            $school = stp_school::where('school_slug', $request->slug)->first();
+
+            if (!$school) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'School not found'
+                ], 404);
             }
+
+            $schoolId = $school->id;
 
 
             $validateExsitData = stp_totalNumberVisit::where('school_id', $schoolId)
@@ -6887,5 +7219,96 @@ class studentController extends Controller
             return $path;
         }
         return ltrim($path, '/');
+    }
+
+    /**
+     * Generate XML sitemap for universities/schools.
+     * Returns dynamically generated sitemap with slug-based URLs.
+     */
+    public function universitiesSitemap(Request $request)
+    {
+        try {
+            $schools = stp_school::whereIn('school_status', [1, 3])
+                ->whereNotNull('school_slug')
+                ->select('school_slug', 'updated_at')
+                ->get();
+
+            $urls = $schools->map(function ($school) {
+                $lastmod = $school->updated_at ? date('Y-m-d\TH:i:sP', strtotime($school->updated_at)) : date('Y-m-d\TH:i:sP');
+
+                return "
+                  <url>
+                    <loc>https://studypal.my/university-details/{$school->school_slug}</loc>
+                    <lastmod>{$lastmod}</lastmod>
+                  </url>";
+            })->join('');
+
+            $xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+              <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">{$urls}
+              </urlset>";
+
+            return response($xml, 200)
+                ->header('Content-Type', 'application/xml');
+        } catch (\Exception $e) {
+            return response("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<error>Error generating sitemap: " . htmlspecialchars($e->getMessage()) . "</error>", 500)
+                ->header('Content-Type', 'application/xml');
+        }
+    }
+
+    private function slugify($text)
+    {
+        $slug = strtolower(trim(preg_replace('/[^\w\s-]/', '', $text)));
+        $slug = preg_replace('/[\s_]+/', '-', $slug);
+        $slug = preg_replace('/\-+/', '-', $slug);
+        return trim($slug, '-');
+    }
+
+    /**
+     * Generate XML sitemap for courses.
+     * Returns dynamically generated sitemap with slug-based URLs.
+     * Example URL: https://studypal.my/course-details/linton-university-college/diploma-in-fashion-design
+     */
+    public function coursesSitemap(Request $request)
+    {
+        try {
+            // Get all active courses from active/temporary schools with slugs
+            $courses = stp_course::with('school')
+                ->whereHas('school', function ($query) {
+                    $query->whereIn('school_status', [1, 3]) // Active or Temporary schools only
+                          ->whereNotNull('school_slug');
+                })
+                ->where('course_status', 1) // Only active courses
+                ->whereNotNull('course_slug')
+                ->select('course_slug', 'school_id', 'updated_at')
+                ->get();
+
+            $xml = '<?xml version="1.0" encoding="UTF-8"?>';
+            $xml .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+
+            foreach ($courses as $course) {
+                // Skip courses without a school or without slugs
+                if (!$course->school || !$course->school->school_slug || !$course->course_slug) {
+                    continue;
+                }
+
+                $lastmod = $course->updated_at
+                    ? date('Y-m-d\TH:i:sP', strtotime($course->updated_at))
+                    : date('Y-m-d\TH:i:sP');
+
+                $xml .= '
+                <url>
+                    <loc>https://studypal.my/course-details/' . $course->school->school_slug . '/' . $course->course_slug . '</loc>
+                    <lastmod>' . $lastmod . '</lastmod>
+                </url>';
+            }
+
+            $xml .= '</urlset>';
+
+            return response($xml, 200)
+                ->header('Content-Type', 'application/xml');
+        } catch (\Exception $e) {
+            return response("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<error>Error generating sitemap: " . htmlspecialchars($e->getMessage()) . "</error>", 500)
+                ->header('Content-Type', 'application/xml');
+        }
     }
 }

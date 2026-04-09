@@ -919,6 +919,9 @@ class AdminController extends Controller
             // Generate the iframe embed code
             $iframeCode = "<iframe src='{$embedUrl}' width='600' height='450' style='border:0;' allowfullscreen='' loading='lazy'></iframe>";
 
+            // Generate unique slug
+            $schoolSlug = $this->generateSchoolSlug($request->name);
+
             $school = stp_school::create([
                 'school_name' => $request->name,
                 'school_email' => $request->email,
@@ -941,6 +944,7 @@ class AdminController extends Controller
                 'account_type' => $request->account,
                 'school_location' => $iframeCode,
                 'school_status' => 3,
+                'school_slug' => $schoolSlug,
                 'created_by' => $authUser->id,
             ]);
 
@@ -1208,8 +1212,14 @@ class AdminController extends Controller
             }
 
             // Update school details
+            // Regenerate slug if name changed or if slug is empty
+            $newSlug = ($school->school_name !== $request->name || empty($school->school_slug))
+                ? $this->generateSchoolSlug($request->name, $school->id)
+                : $school->school_slug;
+
             $updateData = [
                 'school_name' => $request->name,
+                'school_slug' => $newSlug,
                 'school_email' => $request->email,
                 'school_countryCode' => $request->country_code,
                 'school_contactNo' => $request->contact_number,
@@ -1586,6 +1596,7 @@ class AdminController extends Controller
             $course = stp_course::create([
                 'school_id' => $request->schoolID,
                 'course_name' => $request->name,
+                'course_slug' => $this->generateCourseSlug($request->name),
                 'course_description' => $request->description ?? null,
                 'course_requirement' => $request->requirement ?? null,
                 'course_cost' => $request->cost,
@@ -2418,10 +2429,16 @@ class AdminController extends Controller
 
             \Log::info('Reached updated course log line');
 
+            // Regenerate slug if name changed or if slug is empty
+            $newCourseSlug = ($course->course_name !== $request->name || empty($course->course_slug))
+                ? $this->generateCourseSlug($request->name, $course->id)
+                : $course->course_slug;
+
             // Update course details
             $course->update([
                 'school_id' => $request->schoolID,
                 'course_name' => $request->name,
+                'course_slug' => $newCourseSlug,
                 'course_description' => $request->description ?? null,
                 'course_requirement' => $request->requirement,
                 'course_cost' => $request->cost,
@@ -9150,5 +9167,67 @@ class AdminController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Generate a URL-friendly slug from school name.
+     * Ensures uniqueness by appending a counter if needed.
+     */
+    private function generateSchoolSlug($schoolName, $schoolId = null)
+    {
+        $baseSlug = Str::slug($schoolName);
+        $slug = $baseSlug;
+        $counter = 1;
+
+        // Check if slug exists and ensure it's unique for this school
+        while (true) {
+            $query = stp_school::where('school_slug', $slug);
+            
+            // If updating, exclude current school from check
+            if ($schoolId) {
+                $query->where('id', '!=', $schoolId);
+            }
+            
+            if (!$query->exists()) {
+                break;
+            }
+            
+            // Append counter if slug is taken
+            $slug = $baseSlug . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
+    }
+
+    /**
+     * Generate a URL-friendly slug from course name.
+     * Ensures uniqueness by appending a counter if needed.
+     */
+    private function generateCourseSlug($courseName, $courseId = null)
+    {
+        $baseSlug = Str::slug($courseName);
+        $slug = $baseSlug;
+        $counter = 1;
+
+        // Check if slug exists and ensure it's unique for this course
+        while (true) {
+            $query = stp_course::where('course_slug', $slug);
+            
+            // If updating, exclude current course from check
+            if ($courseId) {
+                $query->where('id', '!=', $courseId);
+            }
+            
+            if (!$query->exists()) {
+                break;
+            }
+            
+            // Append counter if slug is taken
+            $slug = $baseSlug . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
     }
 }

@@ -22,6 +22,7 @@ use App\Models\stp_course_free_education;
 use App\Models\stp_state;
 use App\Models\stp_subject;
 use App\Models\stp_tag;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Intervention\Image\Facades\Image as Image;
@@ -201,6 +202,7 @@ class SchoolController extends Controller
             $createCourse = stp_course::create([
                 'school_id' => $request->schoolID,
                 'course_name' => $request->name,
+                'course_slug' => $this->generateCourseSlug($request->name),
                 'course_description' => $request->description ?? null,
                 'course_requirement' => $request->requirement ?? null,
                 'course_cost' => $request->cost,
@@ -613,9 +615,15 @@ class SchoolController extends Controller
                 $imagePath = 'courseLogo/' . $imageName;
             }
 
+            // Regenerate slug if name changed or if slug is empty
+            $newCourseSlug = ($courses->course_name !== $request->name || empty($courses->course_slug))
+                ? $this->generateCourseSlug($request->name, $courses->id)
+                : $courses->course_slug;
+
             $data = [
                 'school_id' => $request->schoolID,
                 'course_name' => $request->name,
+                'course_slug' => $newCourseSlug,
                 'course_description' => $request->description ?? null,
                 'course_requirement' => $request->requirement ?? null,
                 'course_cost' => $request->cost,
@@ -832,9 +840,14 @@ class SchoolController extends Controller
             // Generate the iframe HTML
             $iframeCode = "<iframe src='{$embedUrl}' width='600' height='450' style='border:0;' allowfullscreen='' loading='lazy'></iframe>";
 
+            // Regenerate slug if name changed or if slug is empty
+            $newSlug = ($school->school_name !== $request->name || empty($school->school_slug))
+                ? $this->generateSchoolSlug($request->name, $school->id)
+                : $school->school_slug;
 
             $updateSchool = $school->update([
                 'school_name' => $request->name,
+                'school_slug' => $newSlug,
                 'school_email' => $request->email,
                 'school_countryCode' => $request->countryCode,
                 'school_contactNo' => $request->contact,
@@ -3991,6 +4004,144 @@ class SchoolController extends Controller
                 'message' => "Internal Server Error",
                 'error' => $e->getMessage()
             ]);
+        }
+    }
+
+    /**
+     * Generate a URL-friendly slug from school name.
+     * Ensures uniqueness by appending a counter if needed.
+     */
+    private function generateSchoolSlug($schoolName, $schoolId = null)
+    {
+        $baseSlug = Str::slug($schoolName);
+        $slug = $baseSlug;
+        $counter = 1;
+
+        // Check if slug exists and ensure it's unique for this school
+        while (true) {
+            $query = stp_school::where('school_slug', $slug);
+            
+            // If updating, exclude current school from check
+            if ($schoolId) {
+                $query->where('id', '!=', $schoolId);
+            }
+            
+            if (!$query->exists()) {
+                break;
+            }
+            
+            // Append counter if slug is taken
+            $slug = $baseSlug . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
+    }
+
+    /**
+     * Generate slugs for all existing schools that don't have one.
+     * Call this once to backfill slugs: /api/generate-slugs-for-existing-schools
+     */
+    public function generateSlugForExisting()
+    {
+        try {
+            $schools = stp_school::whereNull('school_slug')
+                ->orWhere('school_slug', '')
+                ->get();
+
+            $updated = 0;
+            $errors = [];
+
+            foreach ($schools as $school) {
+                try {
+                    $slug = $this->generateSchoolSlug($school->school_name, $school->id);
+                    $school->update(['school_slug' => $slug]);
+                    $updated++;
+                } catch (\Exception $e) {
+                    $errors[] = "Failed for school ID {$school->id}: {$e->getMessage()}";
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => "Generated slugs for {$updated} schools",
+                'updated_count' => $updated,
+                'errors' => $errors
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error generating slugs: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Generate a URL-friendly slug from course name.
+     * Ensures uniqueness by appending a counter if needed.
+     */
+    private function generateCourseSlug($courseName, $courseId = null)
+    {
+        $baseSlug = Str::slug($courseName);
+        $slug = $baseSlug;
+        $counter = 1;
+
+        // Check if slug exists and ensure it's unique for this course
+        while (true) {
+            $query = stp_course::where('course_slug', $slug);
+            
+            // If updating, exclude current course from check
+            if ($courseId) {
+                $query->where('id', '!=', $courseId);
+            }
+            
+            if (!$query->exists()) {
+                break;
+            }
+            
+            // Append counter if slug is taken
+            $slug = $baseSlug . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
+    }
+
+    /**
+     * Generate slugs for all existing courses that don't have one.
+     * Call this once to backfill course slugs: /api/generate-slugs-for-existing-courses
+     */
+    public function generateCourseSlugForExisting()
+    {
+        try {
+            $courses = stp_course::whereNull('course_slug')
+                ->orWhere('course_slug', '')
+                ->get();
+
+            $updated = 0;
+            $errors = [];
+
+            foreach ($courses as $course) {
+                try {
+                    $slug = $this->generateCourseSlug($course->course_name, $course->id);
+                    $course->update(['course_slug' => $slug]);
+                    $updated++;
+                } catch (\Exception $e) {
+                    $errors[] = "Failed for course ID {$course->id}: {$e->getMessage()}";
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => "Generated slugs for {$updated} courses",
+                'updated_count' => $updated,
+                'errors' => $errors
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error generating course slugs: ' . $e->getMessage()
+            ], 500);
         }
     }
 }

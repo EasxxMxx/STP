@@ -38,6 +38,7 @@ class stp_school extends Model
         'person_inChargeEmail',
         'account_type',
         'school_logo',
+        'school_slug',
         'created_by',
         'updated_by',
         'free_education_id'

@@ -11,6 +11,7 @@ use App\Models\stp_core_meta;
 use App\Models\stp_student_detail;
 use App\Models\stp_user_detail;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Validator;
@@ -374,8 +375,12 @@ class AuthController extends Controller
                 $imagePath = $image->storeAs('schoolLogo', $imageName, 'public'); // Store in 'storage/app/public/images'
             }
 
+            // Generate unique slug
+            $schoolSlug = $this->generateSchoolSlug($request->name);
+
             $data = [
                 'school_name' => $request->name,
+                'school_slug' => $schoolSlug,
                 'school_email' => $request->email,
                 'school_countryCode' => $request->country_code,
                 'school_contactNo' => $request->contact_number,
@@ -855,5 +860,36 @@ class AuthController extends Controller
     public function testing()
     {
         return 'testing api';
+    }
+
+    /**
+     * Generate a URL-friendly slug from school name.
+     * Ensures uniqueness by appending a counter if needed.
+     */
+    private function generateSchoolSlug($schoolName, $schoolId = null)
+    {
+        $baseSlug = Str::slug($schoolName);
+        $slug = $baseSlug;
+        $counter = 1;
+
+        // Check if slug exists and ensure it's unique for this school
+        while (true) {
+            $query = stp_school::where('school_slug', $slug);
+            
+            // If updating, exclude current school from check
+            if ($schoolId) {
+                $query->where('id', '!=', $schoolId);
+            }
+            
+            if (!$query->exists()) {
+                break;
+            }
+            
+            // Append counter if slug is taken
+            $slug = $baseSlug . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
     }
 }

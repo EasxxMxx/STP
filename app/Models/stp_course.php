@@ -25,6 +25,7 @@ class stp_course extends Model
         'qualification_id',
         'course_logo',
         'course_status',
+        'course_slug',
         'updated_by',
         'created_by',
     ];

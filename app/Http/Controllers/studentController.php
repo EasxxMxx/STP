@@ -3953,6 +3953,7 @@ class studentController extends Controller
 
                     return [
                         'id' => $course->id,
+                        'course_slug' => $course->course_slug,
                         'course_id' => $course->id,
                         'course_name' => $course->course_name,
                         'course_logo' => $course->course_logo ?? $course->school->school_logo,

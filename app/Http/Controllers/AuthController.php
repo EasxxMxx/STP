@@ -235,21 +235,18 @@ class AuthController extends Controller
     {
         try {
             $request->validate([
+                'school_countryCode' => 'required|string',
+                'school_contactNo' => 'required|string',
                 'password' => 'required',
-                'email' => 'required|string|email',
             ]);
-            $checkUser = stp_school::where('school_email', $request->email)->exists();
-            if (!$checkUser) {
-                throw ValidationException::withMessages([
-                    'email' => ['The provided email is incorrect.'],
-                ]);
-            }
 
-            $user = stp_school::where('school_email', $request->email)->first();
+            $user = stp_school::where('school_countryCode', $request->school_countryCode)
+                ->where('school_contactNo', $request->school_contactNo)
+                ->first();
 
             if (!$user) {
                 throw ValidationException::withMessages([
-                    'email' => ['The provided email is incorrect.'],
+                    'school_contactNo' => ['The provided country code or contact number is incorrect.'],
                 ]);
             }
 

@@ -933,6 +933,7 @@ class studentController extends Controller
                 'school_contactNo' => $school->school_contactNo ?? null,
                 'school_countryCode' => $school->school_countryCode ?? null,
                 'person_inChargeEmail' => $school->person_inChargeEmail ?? null,
+                'person_inChargeNumber' => $school->person_inChargeNumber ?? null,
                 'category' => $school->institueCategory->core_metaName ?? null,
                 'logo' => $school->school_logo,
                 'country' => $school->country->country_name ?? null,

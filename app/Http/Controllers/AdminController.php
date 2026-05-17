@@ -167,24 +167,36 @@ class AdminController extends Controller
                 ];
             }
 
-            // Check if GD or Imagick extension is available
+            // Select a driver that can actually encode WebP.
             $gdLoaded = extension_loaded('gd');
             $imagickLoaded = extension_loaded('imagick');
 
-            if (!$gdLoaded && !$imagickLoaded) {
-                throw new \Exception('GD or Imagick extension is required for image processing');
-            }
-
-            // Check if WebP is supported by GD
+            $gdSupportsWebp = false;
             if ($gdLoaded) {
                 $gdInfo = gd_info();
-                if (!isset($gdInfo['WebP Support']) || !$gdInfo['WebP Support']) {
-                    throw new \Exception('WebP is not supported by GD extension');
+                $gdSupportsWebp = isset($gdInfo['WebP Support']) && (bool) $gdInfo['WebP Support'];
+            }
+
+            $imagickSupportsWebp = false;
+            if ($imagickLoaded) {
+                if (class_exists('Imagick')) {
+                    try {
+                        $imagickSupportsWebp = !empty(\Imagick::queryFormats('WEBP'));
+                    } catch (\Throwable $e) {
+                        $imagickSupportsWebp = false;
+                    }
+                } else {
+                    // Extension loaded but class is unavailable for some reason.
+                    $imagickSupportsWebp = false;
                 }
             }
 
-            // Create ImageManager instance for Intervention Image v3
-            $driver = $gdLoaded ? new GdDriver() : new ImagickDriver();
+            if (!$gdSupportsWebp && !$imagickSupportsWebp) {
+                throw new \Exception('No WebP-capable driver available. Enable GD with WebP support or Imagick with WebP codec.');
+            }
+
+            // Prefer GD when it supports WebP, otherwise use Imagick.
+            $driver = $gdSupportsWebp ? new GdDriver() : new ImagickDriver();
             $manager = new ImageManager($driver);
             $img = $manager->read($tempPath);
             
@@ -212,7 +224,11 @@ class AdminController extends Controller
 
         } catch (\Exception $e) {
             // Log the error for debugging
-            Log::error('WebP conversion failed for article image: ' . $e->getMessage());
+            Log::error('WebP conversion failed for image: ' . $e->getMessage(), [
+                'destination' => $destinationPath,
+                'image_name' => $imageName,
+                'original_extension' => $originalExtension,
+            ]);
             
             // Fallback: save original format
             try {
@@ -234,7 +250,11 @@ class AdminController extends Controller
                     'success' => false
                 ];
             } catch (\Exception $fallbackError) {
-                Log::error('Fallback image save also failed: ' . $fallbackError->getMessage());
+                Log::error('Fallback image save also failed: ' . $fallbackError->getMessage(), [
+                    'destination' => $destinationPath,
+                    'image_name' => $imageName,
+                    'original_extension' => $originalExtension,
+                ]);
                 throw $e; // Re-throw original error
             }
         }

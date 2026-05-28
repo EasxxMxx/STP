@@ -515,6 +515,7 @@ Route::get('/user', function (Request $request) {
 // Sitemap routes
 Route::get('/sitemap-universities.xml', [studentController::class, 'universitiesSitemap']);
 Route::get('/sitemap-courses.xml', [studentController::class, 'coursesSitemap']);
+Route::get('/sitemap-articles.xml', [studentController::class, 'articlesSitemap']);
 
 // Utility routes to generate slugs for existing records (remove after use)
 Route::get('/generate-slugs-for-existing-schools', [SchoolController::class, 'generateSlugForExisting']);

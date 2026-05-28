@@ -4710,7 +4710,8 @@ class studentController extends Controller
             $getResult = stp_personalityTestResult::where('student_id', $authUser->id)->where('status', 1)->get()->first();
             $result = [
                 "score" => json_decode($getResult->score, true),
-                "created_at" => $getResult->created_at
+                "created_at" => $getResult->created_at,
+                "updated_at" => $getResult->updated_at
             ];
             return response()->json([
                 'success' => true,
@@ -7300,6 +7301,53 @@ class studentController extends Controller
                 $xml .= '
                 <url>
                     <loc>https://studypal.my/course-details/' . $course->school->school_slug . '/' . $course->course_slug . '</loc>
+                    <lastmod>' . $lastmod . '</lastmod>
+                </url>';
+            }
+
+            $xml .= '</urlset>';
+
+            return response($xml, 200)
+                ->header('Content-Type', 'application/xml');
+        } catch (\Exception $e) {
+            return response("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<error>Error generating sitemap: " . htmlspecialchars($e->getMessage()) . "</error>", 500)
+                ->header('Content-Type', 'application/xml');
+        }
+    }
+
+    /**
+     * Generate XML sitemap for articles.
+     * Returns dynamically generated sitemap with canonical slug-based URLs.
+     * Example URL: https://studypal.my/articles/read/a-student-s-guide-to-studying-abroad
+     */
+    public function articlesSitemap(Request $request)
+    {
+        try {
+            $articles = stp_article::where('data_status', 1)
+                ->whereNotNull('article_slug')
+                ->where('article_slug', '<>', '')
+                ->select('article_slug', 'updated_at')
+                ->orderBy('updated_at', 'desc')
+                ->get();
+
+            $xml = '<?xml version="1.0" encoding="UTF-8"?>';
+            $xml .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+
+            foreach ($articles as $article) {
+                $slug = trim((string) $article->article_slug);
+                if ($slug === '') {
+                    continue;
+                }
+
+                $lastmod = $article->updated_at
+                    ? date('Y-m-d\TH:i:sP', strtotime($article->updated_at))
+                    : date('Y-m-d\TH:i:sP');
+
+                $loc = htmlspecialchars("https://studypal.my/articles/read/{$slug}", ENT_XML1, 'UTF-8');
+
+                $xml .= '
+                <url>
+                    <loc>' . $loc . '</loc>
                     <lastmod>' . $lastmod . '</lastmod>
                 </url>';
             }

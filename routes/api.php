@@ -182,9 +182,14 @@ Route::prefix('student')->group(function () {
     Route::middleware('auth:sanctum')->get('/personalityQuestionList', [studentController::class, 'personalityQuestionList']);
     Route::middleware('auth:sanctum')->post('/uplaodRiasecResultImage', [studentController::class, 'uplaodRiasecResultImage']);
     Route::post('/getRiasecResultImage', [studentController::class, 'getRiasecResultImage'])->withoutMiddleware('auth:sanctum');
+    Route::get('/sharedRiasecResult/{token}', [studentController::class, 'sharedRiasecResult'])
+        ->where('token', '[A-Za-z0-9]{64}');
 
     Route::middleware('auth:sanctum')->post('/submitTestResult', [studentController::class, 'submitTestResult']);
     Route::middleware('auth:sanctum')->get('/getTestResult', [studentController::class, 'getTestResult']);
+    Route::middleware('auth:sanctum')->get('/riasecShareStatus', [studentController::class, 'riasecShareStatus']);
+    Route::middleware('auth:sanctum')->post('/createRiasecShare', [studentController::class, 'createRiasecShare']);
+    Route::middleware('auth:sanctum')->post('/revokeRiasecShare', [studentController::class, 'revokeRiasecShare']);
     Route::middleware('auth:sanctum')->post('/riasecCourseCategory', [studentController::class, 'riasecCourseCategory']);
 
     // Route::middleware('auth:sanctum')->post('/emailSchoolDocument', [studentController::class, 'emailSchoolDocument']);

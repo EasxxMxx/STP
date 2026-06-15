@@ -52,6 +52,7 @@ use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Carbon\Carbon;
 use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver as GdDriver;
@@ -4724,6 +4725,103 @@ class studentController extends Controller
                 'error' => $e->getMessage()
             ]);
         }
+    }
+
+    public function riasecShareStatus(Request $request)
+    {
+        $result = stp_personalityTestResult::where('student_id', Auth::id())
+            ->where('status', 1)
+            ->first();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'share_token' => $result?->share_token,
+                'shared_at' => $result?->shared_at,
+            ],
+        ]);
+    }
+
+    public function createRiasecShare(Request $request)
+    {
+        $result = stp_personalityTestResult::where('student_id', Auth::id())
+            ->where('status', 1)
+            ->first();
+
+        if (!$result) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No active RIASEC result was found.',
+            ], 404);
+        }
+
+        if (!$result->share_token) {
+            do {
+                $shareToken = Str::random(64);
+            } while (stp_personalityTestResult::where('share_token', $shareToken)->exists());
+
+            $result->update([
+                'share_token' => $shareToken,
+                'shared_at' => now(),
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'share_token' => $result->share_token,
+                'shared_at' => $result->shared_at,
+            ],
+        ]);
+    }
+
+    public function revokeRiasecShare(Request $request)
+    {
+        $result = stp_personalityTestResult::where('student_id', Auth::id())
+            ->where('status', 1)
+            ->first();
+
+        if (!$result) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No active RIASEC result was found.',
+            ], 404);
+        }
+
+        $result->update([
+            'share_token' => null,
+            'shared_at' => null,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data' => ['message' => 'The shared RIASEC link has been disabled.'],
+        ]);
+    }
+
+    public function sharedRiasecResult(string $token)
+    {
+        $result = stp_personalityTestResult::with('student')
+            ->where('share_token', $token)
+            ->where('status', 1)
+            ->first();
+
+        if (!$result || !$result->student) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Shared RIASEC result not found.',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'username' => $result->student->student_userName,
+                'scores' => json_decode($result->score, true),
+                'created_at' => $result->created_at,
+                'updated_at' => $result->updated_at,
+            ],
+        ]);
     }
 
 

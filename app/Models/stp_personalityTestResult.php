@@ -13,7 +13,13 @@ class stp_personalityTestResult extends Model
     protected $fillable = [
         'student_id',
         'score',
-        'status'
+        'status',
+        'share_token',
+        'shared_at',
+    ];
+
+    protected $casts = [
+        'shared_at' => 'datetime',
     ];
 
     public function student(): BelongsTo

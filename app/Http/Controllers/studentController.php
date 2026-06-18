@@ -4862,7 +4862,7 @@ class studentController extends Controller
         $frontendBaseUrl = rtrim(env('FRONTEND_REDIRECT_URL', env('URL', 'https://studypal.my/')), '/');
         $frontendShareUrl = "{$frontendBaseUrl}/share/{$token}";
         $backendShareUrl = url("/share/{$token}");
-        $ogImageUrl = url("/api/student/riasecOgImage/{$token}") . '?v=2';
+        $ogImageUrl = url("/api/student/riasecOgImage/{$token}") . '?v=6';
         $title = "{$username}'s Verified RIASEC Result - {$topType}";
         $description = "View {$username}'s verified {$topType} RIASEC assessment result on StudyPal.";
 
@@ -4994,7 +4994,6 @@ HTML;
     {
         $topType = $this->getRiasecTopType($payload['scores']);
         $username = trim((string) ($payload['username'] ?? 'Student')) ?: 'Student';
-        $topScore = (int) round((float) ($payload['scores'][$topType] ?? 0));
         $width = 1200;
         $height = 630;
         $colorsByType = [
@@ -5006,7 +5005,6 @@ HTML;
             'Conventional' => ['primary' => [76, 78, 121], 'secondary' => [166, 179, 219], 'soft' => [231, 235, 249]],
         ];
         $palette = $colorsByType[$topType] ?? $colorsByType['Realistic'];
-        $typeInitial = strtoupper(substr($topType, 0, 1));
 
         $image = imagecreatetruecolor($width, $height);
         imageantialias($image, true);
@@ -5016,20 +5014,14 @@ HTML;
         $ink = imagecolorallocate($image, 45, 31, 46);
         $muted = imagecolorallocate($image, 105, 84, 96);
         $lightMuted = imagecolorallocate($image, 139, 118, 129);
-        $white = imagecolorallocate($image, 255, 255, 255);
         $offWhite = imagecolorallocate($image, 255, 253, 250);
         $primary = imagecolorallocate($image, ...$palette['primary']);
         $secondary = imagecolorallocate($image, ...$palette['secondary']);
         $soft = imagecolorallocate($image, ...$palette['soft']);
         $shadow = imagecolorallocatealpha($image, 42, 24, 36, 112);
-        $softPrimary = imagecolorallocatealpha($image, $palette['primary'][0], $palette['primary'][1], $palette['primary'][2], 102);
-        $softSecondary = imagecolorallocatealpha($image, $palette['secondary'][0], $palette['secondary'][1], $palette['secondary'][2], 70);
 
         imagefilledrectangle($image, 0, 0, $width, $height, $cream);
-        imagefilledpolygon($image, [0, 0, 1200, 0, 1200, 170, 0, 286], 4, $soft);
-        imagefilledellipse($image, 1010, 92, 420, 420, $softSecondary);
-        imagefilledellipse($image, 1098, 548, 430, 430, $softPrimary);
-        imagefilledellipse($image, 118, 548, 330, 330, $softSecondary);
+        imagefilledrectangle($image, 0, 0, $width, 160, $soft);
         imagefilledrectangle($image, 0, 0, 24, $height, $primary);
 
         $this->imagefilledroundedrectangle($image, 82, 78, 1118, 552, 36, $shadow);
@@ -5037,48 +5029,32 @@ HTML;
         imagerectangle($image, 74, 68, 1110, 542, $soft);
 
         imagefilledrectangle($image, 74, 68, 1110, 143, $primary);
-        imagefilledellipse($image, 110, 105, 36, 36, $secondary);
+        imagefilledrectangle($image, 98, 98, 122, 122, $secondary);
 
         $fontRegular = $this->getRiasecOgFontPath(false);
         $fontBold = $this->getRiasecOgFontPath(true);
 
-        $this->drawRiasecText($image, $fontBold, 25, 134, 115, $white, 'StudyPal RIASEC Assessment');
-        $this->drawRiasecTextFit($image, $fontRegular, 23, 18, 720, 115, 340, $white, "{$username}'s verified result", 'right');
+        $this->drawRiasecText($image, $fontBold, 25, 138, 115, $offWhite, 'StudyPal Personality Assessment');
+        $this->drawRiasecTextFit($image, $fontRegular, 22, 18, 720, 115, 340, $offWhite, "{$username}'s result", 'right');
 
-        $this->drawRiasecText($image, $fontRegular, 28, 118, 205, $muted, 'I discovered my RIASEC personality type');
-        $this->drawRiasecTextFit($image, $fontBold, 84, 58, 112, 304, 620, $ink, $topType);
-        $this->drawRiasecText($image, $fontRegular, 28, 118, 358, $lightMuted, 'A verified result from StudyPal');
+        $this->drawRiasecText($image, $fontRegular, 28, 118, 212, $muted, 'I discovered my personality type');
+        $this->drawRiasecTextFit($image, $fontBold, 50, 58, 112, 304, 620, $ink, $topType);
+        $this->drawRiasecTextFit(
+            $image,
+            $fontRegular,
+            24,
+            18,
+            118,
+            366,
+            510,
+            $lightMuted,
+            'Discover where your strengths can take you.'
+        );
 
-        $this->imagefilledroundedrectangle($image, 118, 407, 482, 472, 18, $primary);
-        $this->drawRiasecText($image, $fontBold, 25, 150, 448, $white, 'View the full result');
-        $this->drawRiasecText($image, $fontRegular, 22, 118, 514, $muted, 'Discover where your strengths can take you.');
+        $this->drawRiasecText($image, $fontBold, 28, 118, 498, $primary, 'studypal.my');
 
-        imagefilledellipse($image, 887, 298, 262, 262, $secondary);
-        imagefilledellipse($image, 887, 298, 216, 216, $primary);
-        $this->drawRiasecTextCentered($image, $fontBold, 86, 887, 287, $white, $typeInitial);
-        $this->drawRiasecTextCentered($image, $fontRegular, 24, 887, 338, $white, "{$topScore}% top score");
-
-        $chipTypes = ['R', 'I', 'A', 'S', 'E', 'C'];
-        $chipLabels = [
-            'Realistic' => 'R',
-            'Investigative' => 'I',
-            'Artistic' => 'A',
-            'Social' => 'S',
-            'Enterprising' => 'E',
-            'Conventional' => 'C',
-        ];
-        $activeChip = $chipLabels[$topType] ?? 'R';
-        $chipStartX = 744;
-        foreach ($chipTypes as $index => $chipType) {
-            $chipX = $chipStartX + ($index * 58);
-            $chipColor = $chipType === $activeChip ? $primary : $soft;
-            $chipTextColor = $chipType === $activeChip ? $white : $muted;
-
-            imagefilledellipse($image, $chipX, 424, 42, 42, $chipColor);
-            $this->drawRiasecTextCentered($image, $fontBold, 18, $chipX, 432, $chipTextColor, $chipType);
-        }
-
-        $this->drawRiasecText($image, $fontBold, 28, 810, 506, $primary, 'studypal.my');
+        $this->imagefilledroundedrectangle($image, 718, 172, 1068, 486, 32, $soft);
+        $this->drawRiasecArtwork($image, $topType, 728, 154, 348, 348);
 
         ob_start();
         imagepng($image);
@@ -5119,6 +5095,66 @@ HTML;
         }
 
         imagestring($image, 5, $x, max(0, $y - 18), $text, $color);
+    }
+
+    private function drawRiasecArtwork($image, string $topType, int $targetX, int $targetY, int $targetWidth, int $targetHeight): void
+    {
+        if (!function_exists('imagecreatefromwebp')) {
+            return;
+        }
+
+        $typeFileNames = [
+            'Realistic' => 'realisticmain.webp',
+            'Investigative' => 'investigativemain.webp',
+            'Artistic' => 'artisticmain.webp',
+            'Social' => 'socialmain.webp',
+            'Enterprising' => 'enterprisingmain.webp',
+            'Conventional' => 'conventionalmain.webp',
+        ];
+        $fileName = $typeFileNames[$topType] ?? $typeFileNames['Realistic'];
+        $artworkPath = storage_path("app/public/riasecType/{$fileName}");
+
+        if (!is_file($artworkPath)) {
+            return;
+        }
+
+        $artwork = @imagecreatefromwebp($artworkPath);
+
+        if (!$artwork) {
+            return;
+        }
+
+        imagealphablending($artwork, true);
+        imagesavealpha($artwork, true);
+
+        $sourceWidth = imagesx($artwork);
+        $sourceHeight = imagesy($artwork);
+
+        if ($sourceWidth <= 0 || $sourceHeight <= 0) {
+            imagedestroy($artwork);
+            return;
+        }
+
+        $scale = min($targetWidth / $sourceWidth, $targetHeight / $sourceHeight);
+        $drawWidth = (int) round($sourceWidth * $scale);
+        $drawHeight = (int) round($sourceHeight * $scale);
+        $drawX = $targetX + (int) round(($targetWidth - $drawWidth) / 2);
+        $drawY = $targetY + (int) round(($targetHeight - $drawHeight) / 2);
+
+        imagecopyresampled(
+            $image,
+            $artwork,
+            $drawX,
+            $drawY,
+            0,
+            0,
+            $drawWidth,
+            $drawHeight,
+            $sourceWidth,
+            $sourceHeight
+        );
+
+        imagedestroy($artwork);
     }
 
     private function drawRiasecTextCentered($image, ?string $fontPath, int $size, int $centerX, int $baselineY, int $color, string $text): void

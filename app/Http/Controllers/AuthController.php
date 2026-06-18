@@ -440,10 +440,8 @@ class AuthController extends Controller
                 'password' => 'required|string|min:8',
                 'confirm_password' => 'required|string|min:8|same:password',
                 'country_code' => 'required',
-                'student_nationality' => 'required|string',
                 'contact_number' => 'required|numeric|digits_between:1,15',
                 'email' => 'required|string|email|max:255',
-                'ic' => 'required|string|unique:stp_students,student_icNumber'
             ]);
 
             $checkingUser = stp_student::where('student_countryCode', $request->country_code)
@@ -479,9 +477,7 @@ class AuthController extends Controller
                     'student_userName' => $request->name,
                     'student_countryCode' => $request->country_code,
                     'student_contactNo' => $request->contact_number,
-                    'student_nationality' => $request->student_nationality,
                     'student_password' => Hash::make($request->password),
-                    'student_icNumber' => $request->ic,
                     // 'otp' => $otp,
                     // 'otp_expired_time' => $otpExpiredTime,
                     // 'otp_status' => 1 // Verified by default
@@ -493,10 +489,8 @@ class AuthController extends Controller
                     'student_userName' => $request->name,
                     'student_email' => $request->email,
                     'student_countryCode' => $request->country_code,
-                    'student_nationality' => $request->student_nationality,
                     'student_contactNo' => $request->contact_number,
                     'student_password' => Hash::make($request->password),
-                    'student_icNumber' => $request->ic,
                     'user_role' => 4,
                     // 'otp' => $otp,
                     // 'otp_expired_time' => $otpExpiredTime,

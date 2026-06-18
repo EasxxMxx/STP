@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\studentController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Route;
@@ -21,6 +22,9 @@ Route::get('/', function () {
         'phpVersion' => PHP_VERSION,
     ]);
 });
+
+Route::get('/share/{token}', [studentController::class, 'riasecSharePage'])
+    ->where('token', '[A-Za-z0-9]{64}');
 
 Route::get('/dashboard', function () {
     return Inertia::render('Dashboard');

@@ -184,6 +184,8 @@ Route::prefix('student')->group(function () {
     Route::post('/getRiasecResultImage', [studentController::class, 'getRiasecResultImage'])->withoutMiddleware('auth:sanctum');
     Route::get('/sharedRiasecResult/{token}', [studentController::class, 'sharedRiasecResult'])
         ->where('token', '[A-Za-z0-9]{64}');
+    Route::get('/riasecOgImage/{token}', [studentController::class, 'riasecOgImage'])
+        ->where('token', '[A-Za-z0-9]{64}');
 
     Route::middleware('auth:sanctum')->post('/submitTestResult', [studentController::class, 'submitTestResult']);
     Route::middleware('auth:sanctum')->get('/getTestResult', [studentController::class, 'getTestResult']);

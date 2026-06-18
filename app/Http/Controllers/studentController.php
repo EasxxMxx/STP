@@ -2062,6 +2062,29 @@ class studentController extends Controller
             ]);
 
             $authUser = Auth::user();
+            $missingProfileFields = [];
+
+            if (blank($authUser->student_nationality)) {
+                $missingProfileFields[] = 'nationality';
+            }
+
+            if (blank($authUser->student_icNumber)) {
+                $missingProfileFields[] = 'identity_number';
+            }
+
+            if (!$authUser->detail?->gender) {
+                $missingProfileFields[] = 'gender';
+            }
+
+            if (!empty($missingProfileFields)) {
+                throw ValidationException::withMessages([
+                    'profile' => [
+                        'Complete your nationality, identity number, and gender before applying.'
+                    ],
+                    'missing_fields' => $missingProfileFields,
+                ]);
+            }
+
             $studentID = $authUser->id;
             $courseID = $request->courseID;
             // Use database transaction to ensure atomicity
@@ -2129,8 +2152,9 @@ class studentController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation Error',
-                'error' => $e->errors()
-            ], 500);
+                'errors' => $e->errors(),
+                'error' => $e->errors(),
+            ], 422);
         } catch (Exception $e) {
             return response()->json([
                 'success' => false,
@@ -2426,6 +2450,15 @@ class studentController extends Controller
                 'student_backIC' => 'nullable|file|mimes:jpeg,png,jpg,pdf|max:10000',
                 'student_passport' => 'nullable|file|mimes:jpeg,png,jpg,pdf,PNG|max:10000',
             ]);
+
+            if (
+                $request->student_nationality === 'malaysian' &&
+                !preg_match('/^\d{12}$/', $request->ic)
+            ) {
+                throw ValidationException::withMessages([
+                    'ic' => ['Malaysian IC must be exactly 12 digits.'],
+                ]);
+            }
 
 
             $authUser = Auth::user();
@@ -4801,12 +4834,9 @@ class studentController extends Controller
 
     public function sharedRiasecResult(string $token)
     {
-        $result = stp_personalityTestResult::with('student')
-            ->where('share_token', $token)
-            ->where('status', 1)
-            ->first();
+        $payload = $this->getSharedRiasecPayload($token);
 
-        if (!$result || !$result->student) {
+        if (!$payload) {
             return response()->json([
                 'success' => false,
                 'message' => 'Shared RIASEC result not found.',
@@ -4815,13 +4845,256 @@ class studentController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => [
-                'username' => $result->student->student_userName,
-                'scores' => json_decode($result->score, true),
-                'created_at' => $result->created_at,
-                'updated_at' => $result->updated_at,
-            ],
+            'data' => $payload,
         ]);
+    }
+
+    public function riasecSharePage(string $token)
+    {
+        $payload = $this->getSharedRiasecPayload($token);
+
+        if (!$payload) {
+            return response('Shared RIASEC result not found.', 404);
+        }
+
+        $topType = $this->getRiasecTopType($payload['scores']);
+        $username = $payload['username'] ?: 'Student';
+        $frontendBaseUrl = rtrim(env('FRONTEND_REDIRECT_URL', env('URL', 'https://studypal.my/')), '/');
+        $frontendShareUrl = "{$frontendBaseUrl}/share/{$token}";
+        $backendShareUrl = url("/share/{$token}");
+        $ogImageUrl = url("/api/student/riasecOgImage/{$token}");
+        $title = "{$username}'s Verified RIASEC Result - {$topType}";
+        $description = "View {$username}'s verified {$topType} RIASEC assessment result on StudyPal.";
+
+        return response($this->buildRiasecShareHtml(
+            $title,
+            $description,
+            $backendShareUrl,
+            $ogImageUrl,
+            $frontendShareUrl
+        ))->header('Content-Type', 'text/html; charset=UTF-8');
+    }
+
+    public function riasecOgImage(string $token)
+    {
+        $payload = $this->getSharedRiasecPayload($token);
+
+        if (!$payload) {
+            return response('Shared RIASEC result not found.', 404);
+        }
+
+        if (!function_exists('imagecreatetruecolor')) {
+            return response('Server image generation is not available.', 503);
+        }
+
+        $png = $this->buildRiasecOgPng($payload);
+
+        return response($png)
+            ->header('Content-Type', 'image/png')
+            ->header('Cache-Control', 'public, max-age=300');
+    }
+
+    private function getSharedRiasecPayload(string $token): ?array
+    {
+        $result = stp_personalityTestResult::with('student')
+            ->where('share_token', $token)
+            ->where('status', 1)
+            ->first();
+
+        if (!$result || !$result->student) {
+            return null;
+        }
+
+        $scores = json_decode($result->score, true);
+
+        if (!is_array($scores)) {
+            $scores = [];
+        }
+
+        return [
+            'username' => $result->student->student_userName,
+            'scores' => $scores,
+            'created_at' => $result->created_at,
+            'updated_at' => $result->updated_at,
+        ];
+    }
+
+    private function getRiasecTopType(array $scores): string
+    {
+        $validTypes = [
+            'Realistic',
+            'Investigative',
+            'Artistic',
+            'Social',
+            'Enterprising',
+            'Conventional',
+        ];
+
+        $normalizedScores = array_intersect_key($scores, array_flip($validTypes));
+
+        if (!$normalizedScores) {
+            return 'Realistic';
+        }
+
+        arsort($normalizedScores, SORT_NUMERIC);
+
+        return array_key_first($normalizedScores) ?: 'Realistic';
+    }
+
+    private function buildRiasecShareHtml(
+        string $title,
+        string $description,
+        string $shareUrl,
+        string $imageUrl,
+        string $frontendShareUrl
+    ): string {
+        $escapedTitle = e($title);
+        $escapedDescription = e($description);
+        $escapedShareUrl = e($shareUrl);
+        $escapedImageUrl = e($imageUrl);
+        $escapedFrontendShareUrl = e($frontendShareUrl);
+        $jsRedirectUrl = json_encode($frontendShareUrl);
+
+        return <<<HTML
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{$escapedTitle}</title>
+  <meta name="description" content="{$escapedDescription}">
+  <link rel="canonical" href="{$escapedFrontendShareUrl}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="StudyPal">
+  <meta property="og:title" content="{$escapedTitle}">
+  <meta property="og:description" content="{$escapedDescription}">
+  <meta property="og:url" content="{$escapedShareUrl}">
+  <meta property="og:image" content="{$escapedImageUrl}">
+  <meta property="og:image:secure_url" content="{$escapedImageUrl}">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{$escapedTitle}">
+  <meta name="twitter:description" content="{$escapedDescription}">
+  <meta name="twitter:image" content="{$escapedImageUrl}">
+</head>
+<body>
+  <p>Opening StudyPal shared RIASEC result...</p>
+  <p><a href="{$escapedFrontendShareUrl}">Open result</a></p>
+  <script>
+    window.location.replace({$jsRedirectUrl});
+  </script>
+</body>
+</html>
+HTML;
+    }
+
+    private function buildRiasecOgPng(array $payload): string
+    {
+        $topType = $this->getRiasecTopType($payload['scores']);
+        $username = trim((string) ($payload['username'] ?? 'Student')) ?: 'Student';
+        $topScore = (int) round((float) ($payload['scores'][$topType] ?? 0));
+        $width = 1200;
+        $height = 630;
+        $colorsByType = [
+            'Realistic' => ['primary' => [179, 72, 30], 'secondary' => [252, 214, 123]],
+            'Investigative' => ['primary' => [39, 98, 160], 'secondary' => [128, 209, 220]],
+            'Artistic' => ['primary' => [166, 61, 139], 'secondary' => [250, 178, 214]],
+            'Social' => ['primary' => [34, 132, 104], 'secondary' => [147, 220, 162]],
+            'Enterprising' => ['primary' => [160, 58, 58], 'secondary' => [244, 181, 79]],
+            'Conventional' => ['primary' => [84, 86, 126], 'secondary' => [188, 196, 225]],
+        ];
+        $palette = $colorsByType[$topType] ?? $colorsByType['Realistic'];
+
+        $image = imagecreatetruecolor($width, $height);
+        imageantialias($image, true);
+
+        $cream = imagecolorallocate($image, 255, 248, 242);
+        $ink = imagecolorallocate($image, 45, 31, 46);
+        $muted = imagecolorallocate($image, 105, 84, 96);
+        $white = imagecolorallocate($image, 255, 255, 255);
+        $primary = imagecolorallocate($image, ...$palette['primary']);
+        $secondary = imagecolorallocate($image, ...$palette['secondary']);
+        $softPrimary = imagecolorallocatealpha($image, $palette['primary'][0], $palette['primary'][1], $palette['primary'][2], 94);
+        $softSecondary = imagecolorallocatealpha($image, $palette['secondary'][0], $palette['secondary'][1], $palette['secondary'][2], 54);
+
+        imagefilledrectangle($image, 0, 0, $width, $height, $cream);
+        imagefilledellipse($image, 1010, 86, 360, 360, $softSecondary);
+        imagefilledellipse($image, 1110, 530, 460, 460, $softPrimary);
+        imagefilledellipse($image, 118, 536, 310, 310, $softSecondary);
+        imagefilledrectangle($image, 0, 0, 26, $height, $primary);
+
+        $this->imagefilledroundedrectangle($image, 78, 76, 1122, 554, 34, $white);
+        imagerectangle($image, 78, 76, 1122, 554, $secondary);
+
+        $fontRegular = $this->getRiasecOgFontPath(false);
+        $fontBold = $this->getRiasecOgFontPath(true);
+
+        $this->drawRiasecText($image, $fontBold, 28, 116, 135, $primary, 'StudyPal RIASEC Assessment');
+        $this->drawRiasecText($image, $fontRegular, 28, 116, 191, $muted, "{$username}'s verified result");
+        $this->drawRiasecText($image, $fontBold, 82, 112, 302, $ink, $topType);
+        $this->drawRiasecText($image, $fontRegular, 30, 116, 362, $muted, "Top personality type");
+
+        $this->imagefilledroundedrectangle($image, 116, 416, 494, 488, 18, $primary);
+        $this->drawRiasecText($image, $fontBold, 28, 148, 463, $white, 'View full result');
+
+        imagefilledellipse($image, 882, 299, 265, 265, $secondary);
+        imagefilledellipse($image, 882, 299, 210, 210, $primary);
+        $this->drawRiasecText($image, $fontBold, 58, 817, 290, $white, "{$topScore}%");
+        $this->drawRiasecText($image, $fontRegular, 24, 808, 337, $white, 'top score');
+        $this->drawRiasecText($image, $fontRegular, 24, 758, 468, $muted, 'Discover where your strengths can take you.');
+        $this->drawRiasecText($image, $fontBold, 28, 824, 512, $primary, 'studypal.my');
+
+        ob_start();
+        imagepng($image);
+        $png = ob_get_clean();
+        imagedestroy($image);
+
+        return $png ?: '';
+    }
+
+    private function getRiasecOgFontPath(bool $bold): ?string
+    {
+        $paths = $bold
+            ? [
+                public_path('fonts/Ubuntu-Bold.ttf'),
+                'C:\Windows\Fonts\arialbd.ttf',
+                '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            ]
+            : [
+                public_path('fonts/Ubuntu-Regular.ttf'),
+                'C:\Windows\Fonts\arial.ttf',
+                '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            ];
+
+        foreach ($paths as $path) {
+            if (is_file($path)) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    private function drawRiasecText($image, ?string $fontPath, int $size, int $x, int $y, int $color, string $text): void
+    {
+        if ($fontPath && function_exists('imagettftext')) {
+            imagettftext($image, $size, 0, $x, $y, $color, $fontPath, $text);
+            return;
+        }
+
+        imagestring($image, 5, $x, max(0, $y - 18), $text, $color);
+    }
+
+    private function imagefilledroundedrectangle($image, int $x1, int $y1, int $x2, int $y2, int $radius, int $color): void
+    {
+        imagefilledrectangle($image, $x1 + $radius, $y1, $x2 - $radius, $y2, $color);
+        imagefilledrectangle($image, $x1, $y1 + $radius, $x2, $y2 - $radius, $color);
+        imagefilledellipse($image, $x1 + $radius, $y1 + $radius, $radius * 2, $radius * 2, $color);
+        imagefilledellipse($image, $x2 - $radius, $y1 + $radius, $radius * 2, $radius * 2, $color);
+        imagefilledellipse($image, $x1 + $radius, $y2 - $radius, $radius * 2, $radius * 2, $color);
+        imagefilledellipse($image, $x2 - $radius, $y2 - $radius, $radius * 2, $radius * 2, $color);
     }
 
 

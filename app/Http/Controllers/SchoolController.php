@@ -2176,7 +2176,8 @@ class SchoolController extends Controller
 
             // Count occurrences of each country
             foreach ($applicants as $applicant) {
-                $courseGender = $applicant->student->detail->studentGender->core_metaName;
+                $courseGender = $applicant->student?->detail?->studentGender?->core_metaName
+                    ?? 'Unspecified';
                 if (isset($genderCount[$courseGender])) {
                     $genderCount[$courseGender]++;
                 } else {
@@ -2256,7 +2257,8 @@ class SchoolController extends Controller
             $genderCount = [];
 
             foreach ($applicants as $applicant) {
-                $courseGender = $applicant->student->detail->studentGender->core_metaName;
+                $courseGender = $applicant->student?->detail?->studentGender?->core_metaName
+                    ?? 'Unspecified';
 
                 // Initialize country counts if not already set
                 if (!isset($genderCount[$courseGender])) {

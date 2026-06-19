@@ -4860,16 +4860,16 @@ class studentController extends Controller
         $topType = $this->getRiasecTopType($payload['scores']);
         $username = $payload['username'] ?: 'Student';
         $frontendBaseUrl = rtrim(env('FRONTEND_REDIRECT_URL', env('URL', 'https://studypal.my/')), '/');
+        $backendBaseUrl = rtrim(env('BACKEND_PUBLIC_URL', config('app.url')), '/');
         $frontendShareUrl = "{$frontendBaseUrl}/share/{$token}";
-        $backendShareUrl = url("/share/{$token}");
-        $ogImageUrl = url("/api/student/riasecOgImage/{$token}") . '?v=6';
+        $ogImageUrl = "{$backendBaseUrl}/api/student/riasecOgImage/{$token}?v=6";
         $title = "{$username}'s Verified RIASEC Result - {$topType}";
         $description = "View {$username}'s verified {$topType} RIASEC assessment result on StudyPal.";
 
         return response($this->buildRiasecShareHtml(
             $title,
             $description,
-            $backendShareUrl,
+            $frontendShareUrl,
             $ogImageUrl,
             $frontendShareUrl
         ))->header('Content-Type', 'text/html; charset=UTF-8');
@@ -4954,13 +4954,7 @@ class studentController extends Controller
         $escapedImageUrl = e($imageUrl);
         $escapedFrontendShareUrl = e($frontendShareUrl);
         $jsRedirectUrl = json_encode($frontendShareUrl);
-
-        return <<<HTML
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+        $metaTags = <<<HTML
   <title>{$escapedTitle}</title>
   <meta name="description" content="{$escapedDescription}">
   <link rel="canonical" href="{$escapedFrontendShareUrl}">
@@ -4978,16 +4972,66 @@ class studentController extends Controller
   <meta name="twitter:title" content="{$escapedTitle}">
   <meta name="twitter:description" content="{$escapedDescription}">
   <meta name="twitter:image" content="{$escapedImageUrl}">
+HTML;
+
+        $frontendAppHtml = $this->buildRiasecFrontendAppHtml($metaTags);
+
+        if ($frontendAppHtml) {
+            return $frontendAppHtml;
+        }
+
+        return <<<HTML
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+{$metaTags}
 </head>
 <body>
   <p>Opening StudyPal shared RIASEC result...</p>
   <p><a href="{$escapedFrontendShareUrl}">Open result</a></p>
   <script>
-    window.location.replace({$jsRedirectUrl});
+    var frontendUrl = new URL({$jsRedirectUrl});
+    if (window.location.origin !== frontendUrl.origin) {
+      window.location.replace(frontendUrl.href);
+    }
   </script>
 </body>
 </html>
 HTML;
+    }
+
+    private function buildRiasecFrontendAppHtml(string $metaTags): ?string
+    {
+        $frontendDistPath = rtrim((string) env('FRONTEND_DIST_PATH', ''), DIRECTORY_SEPARATOR);
+        $candidatePaths = array_filter([
+            $frontendDistPath ? $frontendDistPath . DIRECTORY_SEPARATOR . 'index.html' : null,
+            base_path('../STP-frontend/stp-frontend/dist/index.html'),
+        ]);
+
+        $indexHtml = null;
+        foreach ($candidatePaths as $candidatePath) {
+            if (is_file($candidatePath) && is_readable($candidatePath)) {
+                $indexHtml = file_get_contents($candidatePath);
+                break;
+            }
+        }
+
+        if (!$indexHtml || stripos($indexHtml, '</head>') === false) {
+            return null;
+        }
+
+        $patterns = [
+            '/<title>.*?<\/title>\s*/is',
+            '/<meta\s+name=["\']description["\'][^>]*>\s*/i',
+            '/<link\s+rel=["\']canonical["\'][^>]*>\s*/i',
+            '/<meta\s+property=["\']og:[^"\']+["\'][^>]*>\s*/i',
+            '/<meta\s+name=["\']twitter:[^"\']+["\'][^>]*>\s*/i',
+        ];
+        $indexHtml = preg_replace($patterns, '', $indexHtml);
+
+        return preg_replace('/<\/head>/i', $metaTags . "\n</head>", $indexHtml, 1);
     }
 
     private function buildRiasecOgPng(array $payload): string

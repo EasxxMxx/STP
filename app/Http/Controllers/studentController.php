@@ -3767,12 +3767,14 @@ class studentController extends Controller
                     
                     return [
                         'id' => $course->id,
+                        'course_slug' => $course->course_slug,
                         'course_id' => $course->id,
                         'course_name' => $course->course_name,
                         'course_logo' => $course->course_logo ?? $course->school->school_logo,
                         'course_qualification' => $course->qualification->qualification_name,
                         'course_qualification_color' => $course->qualification->qualification_color_code,
                         'school_id' => $course->school->id,
+                        'school_slug' => $course->school->school_slug,
                         'school_category' => $course->school->institueCategory->core_metaName,
                         'school_email' => $course->school->school_email,
                         'course_school' => $course->school->school_name,
@@ -3878,12 +3880,14 @@ class studentController extends Controller
 
                     return [
                         'id' => $course->id,
+                        'course_slug' => $course->course_slug,
                         'course_id' => $course->id,
                         'course_name' => $course->course_name,
                         'course_logo' => $course->course_logo ?? $course->school->school_logo,
                         'course_qualification' => $course->qualification->qualification_name,
                         'course_qualification_color' => $course->qualification->qualification_color_code,
                         'school_id' => $course->school->id,
+                        'school_slug' => $course->school->school_slug,
                         'school_category' => $course->school->institueCategory->core_metaName,
                         'school_email' => $course->school->school_email,
                         'course_school' => $course->school->school_name,
@@ -3995,6 +3999,7 @@ class studentController extends Controller
                         'course_qualification' => $course->qualification->qualification_name,
                         'course_qualification_color' => $course->qualification->qualification_color_code,
                         'school_id' => $course->school->id,
+                        'school_slug' => $course->school->school_slug,
                         'school_category' => $course->school->institueCategory->core_metaName,
                         'school_email' => $course->school->school_email,
                         'course_school' => $course->school->school_name,

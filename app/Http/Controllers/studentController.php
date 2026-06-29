@@ -329,6 +329,7 @@ class studentController extends Controller
                             });
                         });
                 }])
+                ->inRandomOrder()
                 ->skip($offset)
                 ->take($nonFeaturedLimit)
                 ->get();

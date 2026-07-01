@@ -7806,6 +7806,121 @@ HTML;
     }
 
     /**
+     * Generate XML sitemap for course listing landing pages.
+     * Includes /courses/:schoolSlug, /courses/:categorySlug, and real /courses/:schoolSlug/:categorySlug pairs.
+     */
+    public function courseListingsSitemap(Request $request)
+    {
+        try {
+            $now = date('Y-m-d\TH:i:sP');
+
+            $schools = stp_school::whereIn('school_status', [1, 3])
+                ->whereNotNull('school_slug')
+                ->where('school_slug', '<>', '')
+                ->whereHas('courses', function ($query) {
+                    $query->where('course_status', 1);
+                })
+                ->select('id', 'school_slug', 'updated_at')
+                ->get();
+
+            $categories = stp_courses_category::where('category_status', 1)
+                ->whereHas('courses', function ($query) {
+                    $query->where('course_status', 1)
+                        ->whereHas('school', function ($schoolQuery) {
+                            $schoolQuery->whereIn('school_status', [1, 3])
+                                ->whereNotNull('school_slug')
+                                ->where('school_slug', '<>', '');
+                        });
+                })
+                ->select('id', 'category_name', 'updated_at')
+                ->get();
+
+            $schoolCategoryPairs = stp_course::with(['school:id,school_slug,updated_at', 'category:id,category_name,updated_at'])
+                ->where('course_status', 1)
+                ->whereNotNull('category_id')
+                ->whereHas('school', function ($query) {
+                    $query->whereIn('school_status', [1, 3])
+                        ->whereNotNull('school_slug')
+                        ->where('school_slug', '<>', '');
+                })
+                ->whereHas('category', function ($query) {
+                    $query->where('category_status', 1);
+                })
+                ->select('school_id', 'category_id', DB::raw('MAX(updated_at) as updated_at'))
+                ->groupBy('school_id', 'category_id')
+                ->get();
+
+            $urls = collect();
+
+            foreach ($schools as $school) {
+                $lastmod = $school->updated_at
+                    ? date('Y-m-d\TH:i:sP', strtotime($school->updated_at))
+                    : $now;
+
+                $urls->push([
+                    'loc' => "https://studypal.my/courses/{$school->school_slug}",
+                    'lastmod' => $lastmod,
+                ]);
+            }
+
+            foreach ($categories as $category) {
+                $categorySlug = $this->slugify($category->category_name);
+                if ($categorySlug === '') {
+                    continue;
+                }
+
+                $lastmod = $category->updated_at
+                    ? date('Y-m-d\TH:i:sP', strtotime($category->updated_at))
+                    : $now;
+
+                $urls->push([
+                    'loc' => "https://studypal.my/courses/{$categorySlug}",
+                    'lastmod' => $lastmod,
+                ]);
+            }
+
+            foreach ($schoolCategoryPairs as $pair) {
+                if (!$pair->school || !$pair->category || !$pair->school->school_slug) {
+                    continue;
+                }
+
+                $categorySlug = $this->slugify($pair->category->category_name);
+                if ($categorySlug === '') {
+                    continue;
+                }
+
+                $lastmod = $pair->updated_at
+                    ? date('Y-m-d\TH:i:sP', strtotime($pair->updated_at))
+                    : $now;
+
+                $urls->push([
+                    'loc' => "https://studypal.my/courses/{$pair->school->school_slug}/{$categorySlug}",
+                    'lastmod' => $lastmod,
+                ]);
+            }
+
+            $xml = '<?xml version="1.0" encoding="UTF-8"?>';
+            $xml .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+
+            foreach ($urls->unique('loc')->sortBy('loc') as $url) {
+                $xml .= '
+                <url>
+                    <loc>' . htmlspecialchars($url['loc'], ENT_XML1, 'UTF-8') . '</loc>
+                    <lastmod>' . $url['lastmod'] . '</lastmod>
+                </url>';
+            }
+
+            $xml .= '</urlset>';
+
+            return response($xml, 200)
+                ->header('Content-Type', 'application/xml');
+        } catch (\Exception $e) {
+            return response("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<error>Error generating sitemap: " . htmlspecialchars($e->getMessage()) . "</error>", 500)
+                ->header('Content-Type', 'application/xml');
+        }
+    }
+
+    /**
      * Generate XML sitemap for articles.
      * Returns dynamically generated sitemap with canonical slug-based URLs.
      * Example URL: https://studypal.my/articles/read/a-student-s-guide-to-studying-abroad

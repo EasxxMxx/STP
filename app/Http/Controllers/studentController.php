@@ -25,6 +25,7 @@ use App\Models\User;
 use App\Models\stp_transcript;
 use App\Models\stp_submited_form;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use App\Http\Controllers\serviceFunctionController;
 use App\Models\stp_cgpa;
@@ -85,6 +86,51 @@ class studentController extends Controller
                 'message' => "Internal Server Error",
                 'error' => $e->getMessage()
             ]);
+        }
+    }
+
+    public function platformStatistics()
+    {
+        try {
+            $statistics = Cache::remember(
+                'public.platform_statistics',
+                now()->addMinutes(15),
+                function () {
+                    $applicationCount = stp_submited_form::where('form_status', '!=', 0)
+                        ->count();
+
+                    $courseCount = stp_course::where('course_status', 1)
+                        ->whereHas('school', function ($query) {
+                            $query->whereIn('school_status', [1, 3]);
+                        })
+                        ->count();
+
+                    $institutionCount = stp_school::whereIn('school_status', [1, 3])
+                        ->count();
+
+                    return [
+                        'student_applications' => intdiv($applicationCount, 5) * 5,
+                        'courses' => $courseCount,
+                        'institutions' => $institutionCount,
+                    ];
+                }
+            );
+
+            return response()
+                ->json([
+                    'success' => true,
+                    'data' => $statistics,
+                ])
+                ->header('Cache-Control', 'public, max-age=900');
+        } catch (Exception $e) {
+            Log::error('Failed to load public platform statistics', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to load platform statistics.',
+            ], 500);
         }
     }
 

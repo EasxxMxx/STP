@@ -11,6 +11,8 @@ use App\Http\Controllers\serviceFunctionController;
 use App\Http\Controllers\studentController;
 use App\Http\Controllers\SocialLoginController;
 use App\Http\Controllers\EnquiryController;
+use App\Http\Controllers\MascotGuideController;
+use App\Http\Middleware\EnsureAdminRole;
 use GuzzleHttp\Client;
 
 
@@ -33,7 +35,9 @@ Route::get('/countryCode', [countryController::class, 'countryCode']);
 
 
 Route::prefix('student')->group(function () {
+    Route::get('/mascotGuideList', [MascotGuideController::class, 'publicList']);
     Route::get('/checkAppVersion', [studentController::class, 'checkAppVersion']);
+    Route::get('/platformStatistics', [studentController::class, 'platformStatistics']);
     Route::post('/hpFeaturedSchoolList', [studentController::class, 'hpFeaturedSchoolList']);
     Route::post('/hpFeaturedCoursesList', [studentController::class, 'hpFeaturedCoursesList']);
     Route::post('/schoolList', [studentController::class, 'schoolList']);
@@ -199,6 +203,16 @@ Route::prefix('student')->group(function () {
 });
 
 Route::prefix('admin')->middleware('auth:sanctum')->group(function () {
+    Route::middleware(EnsureAdminRole::class)->group(function () {
+        Route::post('/mascotGuideList', [MascotGuideController::class, 'adminList']);
+        Route::post('/mascotGuideDetail', [MascotGuideController::class, 'detail']);
+        Route::post('/addMascotGuide', [MascotGuideController::class, 'store']);
+        Route::post('/editMascotGuide', [MascotGuideController::class, 'update']);
+        Route::post('/publishMascotGuide', [MascotGuideController::class, 'publish']);
+        Route::post('/unpublishMascotGuide', [MascotGuideController::class, 'unpublish']);
+        Route::post('/archiveMascotGuide', [MascotGuideController::class, 'archive']);
+    });
+
     Route::post('/adminList', [AdminController::class, 'adminList']);
     Route::post('/studentList', [AdminController::class, 'studentList']);
     Route::post('/studentListAdmin', [AdminController::class, 'studentListAdmin']);

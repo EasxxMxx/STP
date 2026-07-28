@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\stp_core_meta;
 use App\Models\stp_mascot_guide;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -12,6 +13,10 @@ use Illuminate\Validation\ValidationException;
 
 class MascotGuideService
 {
+    public const GLOBAL_SETTING_TYPE = 'feature_setting';
+
+    public const GLOBAL_SETTING_NAME = 'mascot_guides';
+
     public const TRIGGER_TYPES = ['immediate', 'delay', 'idle', 'courseViewCount'];
 
     public const ANCHOR_TARGETS = ['find-path', 'articles'];
@@ -28,6 +33,35 @@ class MascotGuideService
             ->get()
             ->map(fn (stp_mascot_guide $guide) => $this->toPublicPayload($guide))
             ->values();
+    }
+
+    public function globalEnabled(): bool
+    {
+        return (bool) stp_core_meta::query()
+            ->where('core_metaType', self::GLOBAL_SETTING_TYPE)
+            ->where('core_metaName', self::GLOBAL_SETTING_NAME)
+            ->value('core_metaStatus');
+    }
+
+    public function setGlobalEnabled(bool $enabled, int $adminId): bool
+    {
+        $setting = stp_core_meta::firstOrCreate(
+            [
+                'core_metaType' => self::GLOBAL_SETTING_TYPE,
+                'core_metaName' => self::GLOBAL_SETTING_NAME,
+            ],
+            [
+                'core_metaStatus' => 0,
+                'created_by' => $adminId,
+            ]
+        );
+
+        $setting->update([
+            'core_metaStatus' => $enabled ? 1 : 0,
+            'updated_by' => $adminId,
+        ]);
+
+        return (bool) $setting->core_metaStatus;
     }
 
     public function create(array $attributes, ?UploadedFile $image, int $adminId): stp_mascot_guide

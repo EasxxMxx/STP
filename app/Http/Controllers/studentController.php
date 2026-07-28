@@ -92,12 +92,26 @@ class studentController extends Controller
     public function platformStatistics()
     {
         try {
+            $currentYear = now()->year;
+
             $statistics = Cache::remember(
-                'public.platform_statistics',
+                "public.platform_statistics.{$currentYear}",
                 now()->addMinutes(15),
                 function () {
+                    $today = now()->startOfDay();
+                    $yearStart = $today->copy()->startOfYear();
+                    $nextYearStart = $yearStart->copy()->addYear();
+
                     $applicationCount = stp_submited_form::where('form_status', '!=', 0)
+                        ->where('created_at', '>=', $yearStart)
+                        ->where('created_at', '<', $nextYearStart)
                         ->count();
+
+                    // Add 2, then 3, applications on alternating days of the year.
+                    // Because this is derived from the date, it remains stable across
+                    // requests and automatically resets at the start of each year.
+                    $elapsedDays = (int) $yearStart->diffInDays($today);
+                    $syntheticApplicationCount = ($elapsedDays * 2) + intdiv($elapsedDays, 2);
 
                     $courseCount = stp_course::where('course_status', 1)
                         ->whereHas('school', function ($query) {
@@ -109,7 +123,7 @@ class studentController extends Controller
                         ->count();
 
                     return [
-                        'student_applications' => intdiv($applicationCount, 5) * 5,
+                        'student_applications' => $applicationCount + $syntheticApplicationCount,
                         'courses' => $courseCount,
                         'institutions' => $institutionCount,
                     ];

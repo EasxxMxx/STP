@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Requests\MascotGuide\MascotGuideIdRequest;
 use App\Http\Requests\MascotGuide\StoreMascotGuideRequest;
 use App\Http\Requests\MascotGuide\UpdateMascotGuideRequest;
+use App\Http\Requests\MascotGuide\UpdateMascotGuideStatusRequest;
 use App\Models\stp_mascot_guide;
 use App\Services\MascotGuideService;
 use Illuminate\Http\JsonResponse;
@@ -19,6 +20,13 @@ class MascotGuideController extends Controller
         return response()->json([
             'success' => true,
             'data' => $this->service->publicGuides(),
+        ]);
+    }
+
+    public function globalStatus(): JsonResponse
+    {
+        return $this->success([
+            'enabled' => $this->service->globalEnabled(),
         ]);
     }
 
@@ -93,6 +101,17 @@ class MascotGuideController extends Controller
         );
 
         return $this->success($this->service->toAdminPayload($guide));
+    }
+
+    public function updateGlobalStatus(
+        UpdateMascotGuideStatusRequest $request
+    ): JsonResponse {
+        return $this->success([
+            'enabled' => $this->service->setGlobalEnabled(
+                $request->boolean('enabled'),
+                (int) $request->user()->id
+            ),
+        ]);
     }
 
     private function findGuide(Request $request): stp_mascot_guide

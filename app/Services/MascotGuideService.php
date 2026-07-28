@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class MascotGuideService
 {
@@ -62,6 +63,21 @@ class MascotGuideService
         ]);
 
         return (bool) $setting->core_metaStatus;
+    }
+
+    public function imageResponse(string $filename): StreamedResponse
+    {
+        $path = 'mascot-guides/'.$filename;
+        $isKnownImage = stp_mascot_guide::query()
+            ->where('image_path', $path)
+            ->exists();
+
+        abort_unless($isKnownImage && Storage::disk('public')->exists($path), 404);
+
+        return Storage::disk('public')->response($path, null, [
+            'Cache-Control' => 'public, max-age=86400',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
     }
 
     public function create(array $attributes, ?UploadedFile $image, int $adminId): stp_mascot_guide
@@ -217,7 +233,13 @@ class MascotGuideService
 
     private function imageUrl(?string $path): ?string
     {
-        return $path ? url(Storage::disk('public')->url($path)) : null;
+        if (! $path) {
+            return null;
+        }
+
+        return request()->root()
+            .'/api/student/mascotGuideImage/'
+            .rawurlencode(basename($path));
     }
 
     private function validateForPublishing(stp_mascot_guide $guide): void

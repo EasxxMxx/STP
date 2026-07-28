@@ -10,6 +10,7 @@ use App\Models\stp_mascot_guide;
 use App\Services\MascotGuideService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class MascotGuideController extends Controller
 {
@@ -28,6 +29,11 @@ class MascotGuideController extends Controller
         return $this->success([
             'enabled' => $this->service->globalEnabled(),
         ]);
+    }
+
+    public function image(string $filename): StreamedResponse
+    {
+        return $this->service->imageResponse($filename);
     }
 
     public function adminList(): JsonResponse

@@ -66,6 +66,25 @@ use Exception;
 
 class studentController extends Controller
 {
+    private function formatArticleIntentConfig(?array $intentConfig): ?array
+    {
+        if (!$intentConfig) {
+            return null;
+        }
+
+        $categoryId = $intentConfig['related_course_category_id'] ?? null;
+        $intentConfig['related_course_category_name'] = $categoryId
+            ? stp_courses_category::whereKey($categoryId)->value('category_name')
+            : null;
+        $schoolId = $intentConfig['related_school_id'] ?? null;
+        $school = $schoolId
+            ? stp_school::select('school_name', 'school_slug')->find($schoolId)
+            : null;
+        $intentConfig['related_school_name'] = $school?->school_name;
+        $intentConfig['related_school_slug'] = $school?->school_slug;
+
+        return $intentConfig;
+    }
     protected $serviceFunctionController;
 
     public function __construct(serviceFunctionController $serviceFunctionController)
@@ -95,7 +114,7 @@ class studentController extends Controller
             $currentYear = now()->year;
 
             $statistics = Cache::remember(
-                "public.platform_statistics.{$currentYear}.20_to_25",
+                "public.platform_statistics.{$currentYear}.20_to_25.course_plus_400",
                 now()->addMinutes(15),
                 function () {
                     $today = now()->startOfDay();
@@ -122,13 +141,14 @@ class studentController extends Controller
                             $query->whereIn('school_status', [1, 3]);
                         })
                         ->count();
+                    $syntheticCourseCount = 400;
 
                     $institutionCount = stp_school::whereIn('school_status', [1, 3])
                         ->count();
 
                     return [
                         'student_applications' => $applicationCount + $syntheticApplicationCount,
-                        'courses' => $courseCount,
+                        'courses' => $courseCount + $syntheticCourseCount,
                         'institutions' => $institutionCount,
                     ];
                 }
@@ -5994,6 +6014,7 @@ HTML;
                     'date' => $formattedDate,
                     'featured_image' => $featuredImageUrl,
                     'content' => $articleContent,
+                    'intent_config' => $this->formatArticleIntentConfig($article->article_intent_config),
                     'content_images' => $contentImages
                 ]
             ]);
@@ -6133,6 +6154,7 @@ HTML;
                     'date' => $formattedDate,
                     'featured_image' => $featuredImageUrl,
                     'content' => $articleContent,
+                    'intent_config' => $this->formatArticleIntentConfig($article->article_intent_config),
                     'content_images' => $contentImages
                 ]
             ]);

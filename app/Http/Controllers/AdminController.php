@@ -70,6 +70,90 @@ class AdminController extends Controller
         $this->serviceFunction = $serviceFunction;
     }
 
+    private function normalizeArticleIntentConfig(Request $request): ?array
+    {
+        if (!$request->filled('intentConfig')) {
+            return null;
+        }
+
+        $intentConfig = json_decode($request->input('intentConfig'), true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($intentConfig)) {
+            throw ValidationException::withMessages([
+                'intentConfig' => ['The intent configuration must be valid JSON.'],
+            ]);
+        }
+
+        $validated = validator($intentConfig, [
+            'version' => 'required|integer|in:1',
+            'enabled' => 'required|boolean',
+            'intent' => 'required|string|in:courses,universities,careers',
+            'card_type' => 'required|string|in:course_matcher,university_courses,career_to_course',
+            'related_course_category_id' => 'nullable|integer|exists:stp_courses_category,id',
+            'related_school_id' => 'nullable|integer|exists:stp_schools,id',
+            'title' => 'required|string|max:120',
+            'description' => 'required|string|max:300',
+            'button_label' => 'required|string|max:60',
+        ])->validate();
+
+        if (!$validated['enabled']) {
+            return null;
+        }
+
+        $supportedCards = [
+            'courses' => 'course_matcher',
+            'universities' => 'university_courses',
+            'careers' => 'career_to_course',
+        ];
+
+        if (($supportedCards[$validated['intent']] ?? null) !== $validated['card_type']) {
+            throw ValidationException::withMessages([
+                'intentConfig' => ['The selected intent and card type do not match.'],
+            ]);
+        }
+
+        if ($validated['intent'] === 'universities' && empty($validated['related_school_id'])) {
+            throw ValidationException::withMessages([
+                'related_school_id' => ['A university is required for this intent card.'],
+            ]);
+        }
+
+        return [
+            'version' => 1,
+            'enabled' => true,
+            'intent' => $validated['intent'],
+            'card_type' => $validated['card_type'],
+            'related_course_category_id' => $validated['intent'] === 'courses'
+                ? ($validated['related_course_category_id'] ?? null)
+                : null,
+            'related_school_id' => $validated['intent'] === 'universities'
+                ? $validated['related_school_id']
+                : null,
+            'title' => trim($validated['title']),
+            'description' => trim($validated['description']),
+            'button_label' => trim($validated['button_label']),
+        ];
+    }
+
+    private function formatArticleIntentConfig(?array $intentConfig): ?array
+    {
+        if (!$intentConfig) {
+            return null;
+        }
+
+        $categoryId = $intentConfig['related_course_category_id'] ?? null;
+        $intentConfig['related_course_category_name'] = $categoryId
+            ? stp_courses_category::whereKey($categoryId)->value('category_name')
+            : null;
+        $schoolId = $intentConfig['related_school_id'] ?? null;
+        $school = $schoolId
+            ? stp_school::select('school_name', 'school_slug')->find($schoolId)
+            : null;
+        $intentConfig['related_school_name'] = $school?->school_name;
+        $intentConfig['related_school_slug'] = $school?->school_slug;
+
+        return $intentConfig;
+    }
+
     /**
      * Generate a unique article slug from provided slug
      * Mirrors the logic in studentController::generateArticleSlug
@@ -8471,6 +8555,7 @@ class AdminController extends Controller
                 'articleFeatured' => 'nullable|boolean'
             ]);
 
+            $intentConfig = $this->normalizeArticleIntentConfig($request);
             $authUser = Auth::user();
 
             // Generate slug from provided slug to ensure its not malformed
@@ -8501,6 +8586,7 @@ class AdminController extends Controller
                 "article_main_points_2" => $request->mainPoints2 ?? null,
                 "article_main_points_3" => $request->mainPoints3 ?? null,
                 "article_content" => null, // Will be set after processing
+                "article_intent_config" => $intentConfig,
                 "data_status" => 1,
                 "created_by" => $authUser->id
             ]);
@@ -8661,6 +8747,7 @@ class AdminController extends Controller
                 'articleFeatured' => 'nullable'
             ]);
 
+            $intentConfig = $this->normalizeArticleIntentConfig($request);
             $authUser = Auth::user();
 
             // Find the article by ID
@@ -8950,6 +9037,7 @@ class AdminController extends Controller
                 'article_main_points_2' => $request->mainPoints2 ?? null,
                 'article_main_points_3' => $request->mainPoints3 ?? null,
                 'article_content' => $contentFilePath,
+                'article_intent_config' => $intentConfig,
                 'updated_by' => $authUser->id
             ];
 
@@ -9134,6 +9222,7 @@ class AdminController extends Controller
                     'main_points_2' => $article->article_main_points_2 ?? '',
                     'main_points_3' => $article->article_main_points_3 ?? '',
                     'content' => $articleContent,
+                    'intent_config' => $this->formatArticleIntentConfig($article->article_intent_config),
                     'content_images' => $contentImages
                 ]
             ]);

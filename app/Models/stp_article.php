@@ -25,6 +25,7 @@ class stp_article extends Model
         "article_main_points_2",
         "article_main_points_3",
         "article_content",
+        "article_intent_config",
         "data_status",
         "updated_by",
         "created_by"
@@ -35,6 +36,7 @@ class stp_article extends Model
         'article_date' => 'date',
         'article_featured' => 'integer',
         'article_views' => 'integer',
+        'article_intent_config' => 'array',
         'data_status' => 'integer',
         'updated_by' => 'integer',
         'created_by' => 'integer',
@@ -64,4 +66,3 @@ class stp_article extends Model
         return $this->hasMany(\App\Models\stp_article_comment::class, 'article_id', 'id')->where('data_status', 1);
     }
 }
-

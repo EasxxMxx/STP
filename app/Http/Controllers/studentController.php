@@ -545,6 +545,7 @@ class studentController extends Controller
             $transformedSchools = $schools->map(function ($school) {
                 return [
                     'id' => $school->id,
+                    'school_slug' => $school->school_slug,
                     'school_name' => $school->school_name,
                     'name' => $school->school_name, // Alias for compatibility
                     'institution_name' => $school->school_name, // Alias for compatibility

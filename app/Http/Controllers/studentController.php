@@ -7811,10 +7811,17 @@ HTML;
             $schools = stp_school::whereIn('school_status', [1, 3])
                 ->whereNotNull('school_slug')
                 ->select('school_slug', 'updated_at')
+                ->withMax(['courses as active_courses_updated_at' => function ($query) {
+                    $query->where('course_status', 1);
+                }], 'updated_at')
                 ->get();
 
             $urls = $schools->map(function ($school) {
-                $lastmod = $school->updated_at ? date('Y-m-d\TH:i:sP', strtotime($school->updated_at)) : date('Y-m-d\TH:i:sP');
+                $latestUpdate = collect([
+                    $school->updated_at,
+                    $school->active_courses_updated_at,
+                ])->filter()->max();
+                $lastmod = $latestUpdate ? date('Y-m-d\TH:i:sP', strtotime($latestUpdate)) : date('Y-m-d\TH:i:sP');
 
                 return "
                   <url>
@@ -7871,8 +7878,12 @@ HTML;
                     continue;
                 }
 
-                $lastmod = $course->updated_at
-                    ? date('Y-m-d\TH:i:sP', strtotime($course->updated_at))
+                $latestUpdate = collect([
+                    $course->updated_at,
+                    $course->school->updated_at,
+                ])->filter()->max();
+                $lastmod = $latestUpdate
+                    ? date('Y-m-d\TH:i:sP', strtotime($latestUpdate))
                     : date('Y-m-d\TH:i:sP');
 
                 $xml .= '
@@ -7908,6 +7919,9 @@ HTML;
                     $query->where('course_status', 1);
                 })
                 ->select('id', 'school_slug', 'updated_at')
+                ->withMax(['courses as active_courses_updated_at' => function ($query) {
+                    $query->where('course_status', 1);
+                }], 'updated_at')
                 ->get();
 
             $categories = stp_courses_category::where('category_status', 1)
@@ -7920,6 +7934,12 @@ HTML;
                         });
                 })
                 ->select('id', 'category_name', 'updated_at')
+                ->withMax(['courses as active_courses_updated_at' => function ($query) {
+                    $query->where('course_status', 1)
+                        ->whereHas('school', function ($schoolQuery) {
+                            $schoolQuery->whereIn('school_status', [1, 3]);
+                        });
+                }], 'updated_at')
                 ->get();
 
             $schoolCategoryPairs = stp_course::with(['school:id,school_slug,updated_at', 'category:id,category_name,updated_at'])
@@ -7940,8 +7960,12 @@ HTML;
             $urls = collect();
 
             foreach ($schools as $school) {
-                $lastmod = $school->updated_at
-                    ? date('Y-m-d\TH:i:sP', strtotime($school->updated_at))
+                $latestUpdate = collect([
+                    $school->updated_at,
+                    $school->active_courses_updated_at,
+                ])->filter()->max();
+                $lastmod = $latestUpdate
+                    ? date('Y-m-d\TH:i:sP', strtotime($latestUpdate))
                     : $now;
 
                 $urls->push([
@@ -7956,8 +7980,12 @@ HTML;
                     continue;
                 }
 
-                $lastmod = $category->updated_at
-                    ? date('Y-m-d\TH:i:sP', strtotime($category->updated_at))
+                $latestUpdate = collect([
+                    $category->updated_at,
+                    $category->active_courses_updated_at,
+                ])->filter()->max();
+                $lastmod = $latestUpdate
+                    ? date('Y-m-d\TH:i:sP', strtotime($latestUpdate))
                     : $now;
 
                 $urls->push([

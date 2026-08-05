@@ -682,6 +682,8 @@ class studentController extends Controller
 
             $courseListDetail = [
                 'id' => $courseList->id,
+                'course_slug' => $courseList->course_slug,
+                'school_slug' => $courseList->school->school_slug,
                 'course' => $courseList->course_name,
                 'description' => $courseList->course_description,
                 'requirement' => $courseList->course_requirement,

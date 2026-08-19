@@ -7825,9 +7825,15 @@ HTML;
                 ])->filter()->max();
                 $lastmod = $latestUpdate ? date('Y-m-d\TH:i:sP', strtotime($latestUpdate)) : date('Y-m-d\TH:i:sP');
 
+                $loc = htmlspecialchars(
+                    $this->sitemapUrl("/university-details/{$school->school_slug}"),
+                    ENT_XML1,
+                    'UTF-8'
+                );
+
                 return "
                   <url>
-                    <loc>https://studypal.my/university-details/{$school->school_slug}</loc>
+                    <loc>{$loc}</loc>
                     <lastmod>{$lastmod}</lastmod>
                   </url>";
             })->join('');
@@ -7850,6 +7856,16 @@ HTML;
         $slug = preg_replace('/[\s_]+/', '-', $slug);
         $slug = preg_replace('/\-+/', '-', $slug);
         return trim($slug, '-');
+    }
+
+    private function sitemapUrl(string $path = '/'): string
+    {
+        $normalizedPath = '/' . ltrim($path, '/');
+        $normalizedPath = $normalizedPath === '/'
+            ? '/'
+            : rtrim($normalizedPath, '/');
+
+        return 'https://studypal.my' . $normalizedPath;
     }
 
     /**
@@ -7888,9 +7904,15 @@ HTML;
                     ? date('Y-m-d\TH:i:sP', strtotime($latestUpdate))
                     : date('Y-m-d\TH:i:sP');
 
+                $loc = htmlspecialchars(
+                    $this->sitemapUrl('/course-details/' . $course->school->school_slug . '/' . $course->course_slug),
+                    ENT_XML1,
+                    'UTF-8'
+                );
+
                 $xml .= '
                 <url>
-                    <loc>https://studypal.my/course-details/' . $course->school->school_slug . '/' . $course->course_slug . '</loc>
+                    <loc>' . $loc . '</loc>
                     <lastmod>' . $lastmod . '</lastmod>
                 </url>';
             }
@@ -7971,7 +7993,7 @@ HTML;
                     : $now;
 
                 $urls->push([
-                    'loc' => "https://studypal.my/courses/{$school->school_slug}",
+                    'loc' => $this->sitemapUrl("/courses/{$school->school_slug}"),
                     'lastmod' => $lastmod,
                 ]);
             }
@@ -7991,7 +8013,7 @@ HTML;
                     : $now;
 
                 $urls->push([
-                    'loc' => "https://studypal.my/courses/{$categorySlug}",
+                    'loc' => $this->sitemapUrl("/courses/{$categorySlug}"),
                     'lastmod' => $lastmod,
                 ]);
             }
@@ -8011,7 +8033,7 @@ HTML;
                     : $now;
 
                 $urls->push([
-                    'loc' => "https://studypal.my/courses/{$pair->school->school_slug}/{$categorySlug}",
+                    'loc' => $this->sitemapUrl("/courses/{$pair->school->school_slug}/{$categorySlug}"),
                     'lastmod' => $lastmod,
                 ]);
             }
@@ -8065,7 +8087,11 @@ HTML;
                     ? date('Y-m-d\TH:i:sP', strtotime($article->updated_at))
                     : date('Y-m-d\TH:i:sP');
 
-                $loc = htmlspecialchars("https://studypal.my/articles/read/{$slug}", ENT_XML1, 'UTF-8');
+                $loc = htmlspecialchars(
+                    $this->sitemapUrl("/articles/read/{$slug}"),
+                    ENT_XML1,
+                    'UTF-8'
+                );
 
                 $xml .= '
                 <url>

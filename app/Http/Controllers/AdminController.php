@@ -8448,6 +8448,7 @@ class AdminController extends Controller
             $request->validate([
                 'search' => 'nullable|string',
                 'stat' => 'nullable|integer',
+                'category' => 'nullable|integer|exists:stp_article_category,id',
                 'offset' => 'nullable|integer|min:0',
                 'sort_column' => 'nullable|string|in:title,category,totalViews,publishedOn',
                 'sort_direction' => 'nullable|string|in:asc,desc'
@@ -8470,6 +8471,9 @@ class AdminController extends Controller
                 })
                 ->when($request->filled('stat'), function ($query) use ($request) {
                     $query->where('data_status', $request->stat);
+                })
+                ->when($request->filled('category'), function ($query) use ($request) {
+                    $query->where('category_id', $request->category);
                 });
 
             // DB-level sorting

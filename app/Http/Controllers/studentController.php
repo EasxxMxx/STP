@@ -42,6 +42,7 @@ use App\Models\stp_article;
 use App\Models\stp_article_content_image;
 use App\Models\stp_article_comment;
 use App\Models\NewsletterSubscription;
+use App\Services\CareerMatchingService;
 
 use App\Models\stp_totalNumberVisit;
 use App\Models\stp_article_visit;
@@ -4798,45 +4799,77 @@ class studentController extends Controller
         }
     }
 
-    public function submitTestResult(Request $request)
+    public function submitTestResult(Request $request, CareerMatchingService $careerMatchingService)
     {
+        $validated = $request->validate([
+            'scores' => ['required', 'array', 'size:6'],
+            'scores.*' => ['required', 'numeric', 'between:0,100'],
+        ]);
+        $normalizedScores = $careerMatchingService->normalizeScores($validated['scores']);
+
         try {
             $authUser = Auth::user();
-
-            $request->validate([
-                'scores' => 'required'
-            ]);
+            $careerMatches = $careerMatchingService->match($normalizedScores);
             $newData = [
                 'student_id' => $authUser->id,
-                'score' => json_encode($request->scores)
+                'score' => json_encode($normalizedScores),
+                'career_matches' => $careerMatches,
+                'career_match_version' => CareerMatchingService::VERSION,
+                'status' => 1,
             ];
 
             $finduserResult = stp_personalityTestResult::where('student_id', $authUser->id)->first();
             if ($finduserResult !== null) {
                 $finduserResult->update($newData);
             } else {
-                $addResult = stp_personalityTestResult::insert($newData);
+                stp_personalityTestResult::create($newData);
             }
             return response()->json([
                 'success' => true,
-                'data' => ['message' => "successfully save the result"]
+                'data' => [
+                    'message' => "successfully save the result",
+                    'scores' => $normalizedScores,
+                    'career_matches' => $careerMatchingService->toApiPayload($careerMatches),
+                ]
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => "Internal Server Error",
                 'error' => $e->getMessage()
-            ]);
+            ], 500);
         }
     }
 
-    public function getTestResult(Request $request)
+    public function getTestResult(Request $request, CareerMatchingService $careerMatchingService)
     {
         try {
             $authUser = Auth::user();
             $getResult = stp_personalityTestResult::where('student_id', $authUser->id)->where('status', 1)->get()->first();
+
+            if (!$getResult) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No active RIASEC result was found.',
+                ], 404);
+            }
+
+            $scores = json_decode($getResult->score, true);
+            $normalizedScores = $careerMatchingService->normalizeScores(is_array($scores) ? $scores : []);
+            $careerMatches = $getResult->career_matches;
+
+            if (!is_array($careerMatches) || $getResult->career_match_version === null) {
+                $careerMatches = $careerMatchingService->match($normalizedScores);
+                $getResult->update([
+                    'score' => json_encode($normalizedScores),
+                    'career_matches' => $careerMatches,
+                    'career_match_version' => CareerMatchingService::VERSION,
+                ]);
+            }
+
             $result = [
-                "score" => json_decode($getResult->score, true),
+                "score" => $normalizedScores,
+                "career_matches" => $careerMatchingService->toApiPayload($careerMatches),
                 "created_at" => $getResult->created_at,
                 "updated_at" => $getResult->updated_at
             ];
@@ -4849,7 +4882,7 @@ class studentController extends Controller
                 'sucess' => false,
                 'message' => "Internal Server Error",
                 'error' => $e->getMessage()
-            ]);
+            ], 500);
         }
     }
 

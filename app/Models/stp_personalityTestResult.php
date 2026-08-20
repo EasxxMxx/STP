@@ -13,12 +13,16 @@ class stp_personalityTestResult extends Model
     protected $fillable = [
         'student_id',
         'score',
+        'career_matches',
+        'career_match_version',
         'status',
         'share_token',
         'shared_at',
     ];
 
     protected $casts = [
+        'career_matches' => 'array',
+        'career_match_version' => 'integer',
         'shared_at' => 'datetime',
     ];
 

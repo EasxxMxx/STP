@@ -11,6 +11,8 @@ use App\Models\stp_package;
 use App\Models\stp_student_detail;
 use App\Models\stp_user_detail;
 use App\Models\stp_RIASECType;
+use App\Models\stp_career;
+use App\Services\PosterAssetService;
 use App\Models\User;
 use Illuminate\Http\Request;
 use App\Models\stp_student;
@@ -7331,6 +7333,61 @@ class AdminController extends Controller
                 'errors' => $e->getMessage()
             ]);
         }
+    }
+
+    public function careerPosterAssets(PosterAssetService $posterAssets)
+    {
+        return response()->json(['success' => true, 'data' => $posterAssets->careerList()]);
+    }
+
+    public function updateCareerPosterAssets(Request $request, stp_career $career, PosterAssetService $posterAssets)
+    {
+        $validated = $request->validate([
+            'left' => ['nullable', 'image', 'mimes:jpeg,jpg,png,webp', 'max:15360', 'dimensions:min_width=1200,min_height=1600'],
+            'center' => ['nullable', 'image', 'mimes:jpeg,jpg,png,webp', 'max:15360', 'dimensions:min_width=1200,min_height=1600'],
+            'right' => ['nullable', 'image', 'mimes:jpeg,jpg,png,webp', 'max:15360', 'dimensions:min_width=1200,min_height=1600'],
+        ]);
+        if (! $request->hasFile('left') && ! $request->hasFile('center') && ! $request->hasFile('right')) {
+            throw ValidationException::withMessages(['assets' => ['Select at least one career image.']]);
+        }
+        $posterAssets->saveCareerDraft($career, [
+            'left' => $request->file('left'), 'center' => $request->file('center'), 'right' => $request->file('right'),
+        ]);
+
+        return response()->json(['success' => true, 'data' => $posterAssets->careerAdminPayload($career)]);
+    }
+
+    public function publishCareerPosterAssets(Request $request, stp_career $career, PosterAssetService $posterAssets)
+    {
+        $posterAssets->publishCareer($career, (int) $request->user()->id);
+
+        return response()->json(['success' => true, 'data' => $posterAssets->careerAdminPayload($career)]);
+    }
+
+    public function riasecPosterAssets(PosterAssetService $posterAssets)
+    {
+        return response()->json(['success' => true, 'data' => $posterAssets->riasecList()]);
+    }
+
+    public function updateRiasecPosterAssets(Request $request, stp_RIASECType $riasec, PosterAssetService $posterAssets)
+    {
+        $validated = $request->validate([
+            'animal_name' => ['required', 'string', 'max:80'],
+            'animal' => ['nullable', 'image', 'mimes:png,webp', 'max:15360', 'dimensions:min_width=1000,min_height=1400'],
+            'traits' => ['required', 'array', 'size:3'],
+            'traits.*' => ['required', 'string', 'max:24'],
+            'accent_color' => ['required', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+        ]);
+        $posterAssets->saveRiasecDraft($riasec, $validated, $request->file('animal'));
+
+        return response()->json(['success' => true, 'data' => $posterAssets->riasecAdminPayload($riasec)]);
+    }
+
+    public function publishRiasecPosterAssets(Request $request, stp_RIASECType $riasec, PosterAssetService $posterAssets)
+    {
+        $posterAssets->publishRiasec($riasec, (int) $request->user()->id);
+
+        return response()->json(['success' => true, 'data' => $posterAssets->riasecAdminPayload($riasec)]);
     }
     public function addPersonalQuestion(Request $request)
     {

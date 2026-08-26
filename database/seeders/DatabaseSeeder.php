@@ -24,6 +24,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             TranscriptCategoriesSeeder::class,
             CareerSeeder::class,
+            PosterTraitSeeder::class,
         ]);
     }
 }

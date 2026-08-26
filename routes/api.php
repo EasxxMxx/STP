@@ -183,6 +183,8 @@ Route::prefix('student')->group(function () {
         ->where('token', '[A-Za-z0-9]{64}');
     Route::get('/riasecOgImage/{token}', [studentController::class, 'riasecOgImage'])
         ->where('token', '[A-Za-z0-9]{64}');
+    Route::get('/posterAsset/{path}', [studentController::class, 'posterAsset'])
+        ->where('path', 'poster-assets/.*');
 
     Route::middleware('auth:sanctum')->post('/submitTestResult', [studentController::class, 'submitTestResult']);
     Route::middleware('auth:sanctum')->get('/getTestResult', [studentController::class, 'getTestResult']);
@@ -355,6 +357,12 @@ Route::prefix('admin')->middleware('auth:sanctum')->group(function () {
     Route::post('/questionDetail', [AdminController::class, 'questionDetail']);
     Route::post('/personalityQuestionList', [AdminController::class, 'personalityQuestionList']);
     Route::post('/riasecDetail', [AdminController::class, 'riasecDetail']);
+    Route::get('/careerPosterAssets', [AdminController::class, 'careerPosterAssets']);
+    Route::post('/careerPosterAssets/{career}', [AdminController::class, 'updateCareerPosterAssets']);
+    Route::post('/careerPosterAssets/{career}/publish', [AdminController::class, 'publishCareerPosterAssets']);
+    Route::get('/riasecPosterAssets', [AdminController::class, 'riasecPosterAssets']);
+    Route::post('/riasecPosterAssets/{riasec}', [AdminController::class, 'updateRiasecPosterAssets']);
+    Route::post('/riasecPosterAssets/{riasec}/publish', [AdminController::class, 'publishRiasecPosterAssets']);
 
     // number of visit
     Route::post('/totalNumberVisitSchoolList', [AdminController::class, 'totalNumberVisitSchoolList']);

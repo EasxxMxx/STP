@@ -43,6 +43,7 @@ use App\Models\stp_article_content_image;
 use App\Models\stp_article_comment;
 use App\Models\NewsletterSubscription;
 use App\Services\CareerMatchingService;
+use App\Services\PosterAssetService;
 
 use App\Models\stp_totalNumberVisit;
 use App\Models\stp_article_visit;
@@ -4988,9 +4989,13 @@ class studentController extends Controller
         $frontendBaseUrl = rtrim(env('FRONTEND_REDIRECT_URL', env('URL', 'https://studypal.my/')), '/');
         $frontendShareUrl = "{$frontendBaseUrl}/share/{$token}";
         $backendShareUrl = url("/share/{$token}");
-        $ogImageUrl = url("/api/student/riasecOgImage/{$token}") . '?v=6';
-        $title = "{$username}'s Verified RIASEC Result - {$topType}";
-        $description = "View {$username}'s verified {$topType} RIASEC assessment result on StudyPal.";
+        $poster = $payload['poster'] ?? ['ready' => false];
+        $ogImageUrl = $poster['og_image_url'] ?? url("/api/student/riasecOgImage/{$token}").'?v=legacy';
+        $careerNames = collect($poster['career_matches'] ?? [])->pluck('name')->implode(', ');
+        $title = $poster['ready'] ? "{$username}'s Career Matches - {$careerNames}" : "{$username}'s Verified RIASEC Result - {$topType}";
+        $description = $poster['ready']
+            ? "View {$username}'s verified StudyPal career matches: {$careerNames}."
+            : "View {$username}'s verified {$topType} RIASEC assessment result on StudyPal.";
 
         return response($this->buildRiasecShareHtml(
             $title,
@@ -5013,11 +5018,29 @@ class studentController extends Controller
             return response('Server image generation is not available.', 503);
         }
 
-        $png = $this->buildRiasecOgPng($payload);
+        $png = ($payload['poster']['ready'] ?? false)
+            ? $this->buildCareerOgPng($payload)
+            : '';
+        $png = $png ?: $this->buildRiasecOgPng($payload);
 
         return response($png)
             ->header('Content-Type', 'image/png')
             ->header('Cache-Control', 'public, max-age=300');
+    }
+
+    public function posterAsset(string $path)
+    {
+        $posterRoot = realpath(public_path('storage/poster-assets'));
+        $assetPath = realpath(public_path('storage/'.ltrim($path, '/')));
+
+        if (! $posterRoot || ! $assetPath || ! str_starts_with($assetPath, $posterRoot.DIRECTORY_SEPARATOR)) {
+            abort(404);
+        }
+
+        return response()->file($assetPath, [
+            'Cache-Control' => 'public, max-age=31536000, immutable',
+            'Content-Type' => 'image/webp',
+        ]);
     }
 
     private function getSharedRiasecPayload(string $token): ?array
@@ -5037,9 +5060,29 @@ class studentController extends Controller
             $scores = [];
         }
 
+        $careerMatching = app(CareerMatchingService::class);
+        try {
+            $scores = $careerMatching->normalizeScores($scores);
+            $careerMatches = $result->career_matches;
+            if (! is_array($careerMatches) || count($careerMatches) < 3) {
+                $careerMatches = $careerMatching->match($scores);
+                $result->update([
+                    'score' => json_encode($scores),
+                    'career_matches' => $careerMatches,
+                    'career_match_version' => CareerMatchingService::VERSION,
+                ]);
+            }
+        } catch (\Throwable $error) {
+            $careerMatches = [];
+        }
+
+        $topType = $this->getRiasecTopType($scores);
+        $poster = app(PosterAssetService::class)->resolvePoster($topType, $careerMatches, $token);
+
         return [
             'username' => $result->student->student_userName,
             'scores' => $scores,
+            'poster' => $poster,
             'created_at' => $result->created_at,
             'updated_at' => $result->updated_at,
         ];
@@ -5188,6 +5231,98 @@ HTML;
         imagedestroy($image);
 
         return $png ?: '';
+    }
+
+    private function buildCareerOgPng(array $payload): string
+    {
+        $poster = $payload['poster'];
+        $width = 1200;
+        $height = 630;
+        $image = imagecreatetruecolor($width, $height);
+        imageantialias($image, true);
+        $cream = imagecolorallocate($image, 244, 241, 235);
+        $white = imagecolorallocate($image, 255, 255, 255);
+        $accentRgb = sscanf($poster['riasec']['accent_color'] ?? '#c71919', '#%02x%02x%02x');
+        $accent = imagecolorallocate($image, ...($accentRgb ?: [199, 25, 25]));
+        imagefill($image, 0, 0, $cream);
+
+        foreach ($poster['career_matches'] as $index => $career) {
+            $panel = $this->loadPosterImage($career['image_url']);
+            if (! $panel) {
+                imagedestroy($image);
+                return '';
+            }
+            imagefilter($panel, IMG_FILTER_GRAYSCALE);
+            imagefilter($panel, IMG_FILTER_CONTRAST, -12);
+            $this->copyImageCover($image, $panel, $index * 400, 0, 400, $height);
+            imagedestroy($panel);
+            imagefilledrectangle($image, $index * 400, 492, ($index + 1) * 400, 630, imagecolorallocatealpha($image, 0, 0, 0, 50));
+        }
+
+        $animal = $this->loadPosterImage($poster['riasec']['animal_url']);
+        if (! $animal) {
+            imagedestroy($image);
+            return '';
+        }
+        $sourceWidth = imagesx($animal);
+        $sourceHeight = imagesy($animal);
+        $targetHeight = 520;
+        $targetWidth = (int) round($sourceWidth * ($targetHeight / $sourceHeight));
+        imagecopyresampled($image, $animal, (int) (($width - $targetWidth) / 2), 115, 0, 0, $targetWidth, $targetHeight, $sourceWidth, $sourceHeight);
+        imagedestroy($animal);
+
+        imagefilledrectangle($image, 0, 0, $width, 92, $accent);
+        $fontRegular = $this->getRiasecOgFontPath(false);
+        $fontBold = $this->getRiasecOgFontPath(true);
+        $username = trim((string) ($payload['username'] ?? 'Student')) ?: 'Student';
+        $type = strtoupper($poster['riasec']['type']);
+        $this->drawRiasecTextFit($image, $fontBold, 34, 24, 50, 61, 1100, $white, "{$username}, YOU ARE {$type}", 'center');
+        $this->drawRiasecText($image, $fontBold, 21, 38, 474, $white, 'YOUR TOP CAREER MATCHES');
+        foreach ($poster['career_matches'] as $index => $career) {
+            $this->drawRiasecTextFit($image, $fontBold, 28, 20, ($index * 400) + 20, 574, 360, $white, strtoupper($career['name']), 'center');
+        }
+
+        ob_start();
+        imagepng($image);
+        $png = ob_get_clean();
+        imagedestroy($image);
+
+        return $png ?: '';
+    }
+
+    private function loadPosterImage(?string $url)
+    {
+        if (! $url) {
+            return false;
+        }
+        $path = rawurldecode((string) parse_url($url, PHP_URL_PATH));
+        $assetPrefix = '/api/student/posterAsset/';
+        $absolutePath = str_starts_with($path, $assetPrefix)
+            ? public_path('storage/'.substr($path, strlen($assetPrefix)))
+            : public_path(ltrim($path, '/'));
+        if (! is_file($absolutePath)) {
+            return false;
+        }
+        $extension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION));
+
+        return match ($extension) {
+            'webp' => function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($absolutePath) : false,
+            'png' => function_exists('imagecreatefrompng') ? @imagecreatefrompng($absolutePath) : false,
+            'jpg', 'jpeg' => function_exists('imagecreatefromjpeg') ? @imagecreatefromjpeg($absolutePath) : false,
+            default => false,
+        };
+    }
+
+    private function copyImageCover($destination, $source, int $x, int $y, int $width, int $height): void
+    {
+        $sourceWidth = imagesx($source);
+        $sourceHeight = imagesy($source);
+        $scale = max($width / $sourceWidth, $height / $sourceHeight);
+        $cropWidth = (int) round($width / $scale);
+        $cropHeight = (int) round($height / $scale);
+        $sourceX = (int) max(0, ($sourceWidth - $cropWidth) / 2);
+        $sourceY = (int) max(0, ($sourceHeight - $cropHeight) / 2);
+        imagecopyresampled($destination, $source, $x, $y, $sourceX, $sourceY, $width, $height, $cropWidth, $cropHeight);
     }
 
     private function getRiasecOgFontPath(bool $bold): ?string

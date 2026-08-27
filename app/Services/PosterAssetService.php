@@ -19,6 +19,11 @@ use Intervention\Image\ImageManager;
 class PosterAssetService
 {
     private const POSITIONS = ['left', 'center', 'right'];
+    private const WEBP_QUALITY = 82;
+    private const CAREER_RENDER_WIDTH = 1600;
+    private const CAREER_RENDER_HEIGHT = 2200;
+    private const ANIMAL_RENDER_WIDTH = 1400;
+    private const ANIMAL_RENDER_HEIGHT = 1960;
 
     public function careerList(): array
     {
@@ -54,7 +59,13 @@ class PosterAssetService
             }
             $oldSource = $draft->getAttribute("{$position}_source_path");
             $oldRender = $draft->getAttribute("{$position}_image_path");
-            [$source, $render] = $this->storeImage($files[$position], "careers/{$career->slug}", $position);
+            [$source, $render] = $this->storeImage(
+                $files[$position],
+                "careers/{$career->slug}",
+                $position,
+                self::CAREER_RENDER_WIDTH,
+                self::CAREER_RENDER_HEIGHT
+            );
             $draft->setAttribute("{$position}_source_path", $source);
             $draft->setAttribute("{$position}_image_path", $render);
             $this->removeCareerFilesWhenUnused($oldSource, $oldRender, $draft->id);
@@ -115,7 +126,13 @@ class PosterAssetService
             }
             $oldSource = $draft->animal_source_path;
             $oldRender = $draft->animal_image_path;
-            [$source, $render] = $this->storeImage($animal, "riasec/".Str::slug($type->type_name), 'animal');
+            [$source, $render] = $this->storeImage(
+                $animal,
+                "riasec/".Str::slug($type->type_name),
+                'animal',
+                self::ANIMAL_RENDER_WIDTH,
+                self::ANIMAL_RENDER_HEIGHT
+            );
             $draft->animal_source_path = $source;
             $draft->animal_image_path = $render;
             $this->removeRiasecFilesWhenUnused($oldSource, $oldRender, $draft->id);
@@ -190,14 +207,22 @@ class PosterAssetService
         ];
     }
 
-    private function storeImage(UploadedFile $file, string $directory, string $label): array
+    private function storeImage(
+        UploadedFile $file,
+        string $directory,
+        string $label,
+        int $maxWidth,
+        int $maxHeight
+    ): array
     {
         $id = Str::uuid()->toString();
         $sourceName = "{$label}-{$id}.".$file->getClientOriginalExtension();
         $sourcePath = $file->storeAs("poster-source/{$directory}", $sourceName, 'local');
         $renderPath = "poster-assets/{$directory}/{$label}-{$id}.webp";
         $manager = new ImageManager(new Driver);
-        $encoded = $manager->read($file->getRealPath())->toWebp(88);
+        $image = $manager->read($file->getRealPath());
+        $image->scaleDown(width: $maxWidth, height: $maxHeight);
+        $encoded = $image->toWebp(self::WEBP_QUALITY);
         $publicPath = public_path('storage/'.$renderPath);
         File::ensureDirectoryExists(dirname($publicPath));
         File::put($publicPath, (string) $encoded);

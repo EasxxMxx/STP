@@ -27,6 +27,7 @@ use App\Models\stp_submited_form;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules\Password;
 use App\Http\Controllers\serviceFunctionController;
 use App\Models\stp_cgpa;
 use App\Models\stp_cocurriculum;
@@ -2845,9 +2846,9 @@ class studentController extends Controller
     {
         try {
             $request->validate([
-                'currentPassword' => 'required|string|min:8',
-                'newPassword' => 'required|string|min:8',
-                'confirmPassword' => 'required|string|min:8|same:newPassword'
+                'currentPassword' => ['required', 'string'],
+                'newPassword' => ['required', Password::defaults(), 'different:currentPassword'],
+                'confirmPassword' => ['required', 'string', 'same:newPassword']
             ]);
             $authUser = Auth::user();
             if (!Hash::check($request->currentPassword, $authUser->student_password)) {
@@ -3609,8 +3610,8 @@ class studentController extends Controller
         try {
             $request->validate([
                 'id' => 'required|integer',
-                'newPassword' => 'required|string|min:8',
-                'confirmPassword' => 'required|string|min:8|same:newPassword'
+                'newPassword' => ['required', Password::defaults()],
+                'confirmPassword' => ['required', 'string', 'same:newPassword']
             ]);
 
             $findStudent = stp_student::find($request->id);

@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationData;
 use App\Services\ServiceFunction;
 use Carbon\Carbon;
+use Illuminate\Validation\Rules\Password;
 
 class AuthController extends Controller
 {
@@ -293,8 +294,8 @@ class AuthController extends Controller
         try {
             $request->validate([
                 'name' => 'required|string|max:255',
-                'password' => 'required|string|min:8',
-                'confirm_password' => 'required|string|min:8|same:password',
+                'password' => ['required', Password::defaults()],
+                'confirm_password' => ['required', 'string', 'same:password'],
                 'country_code' => 'required',
                 'country' => 'integer',
                 'state' => 'integer',
@@ -437,8 +438,8 @@ class AuthController extends Controller
         try {
             $request->validate([
                 'name' => 'required|string|max:255',
-                'password' => 'required|string|min:8',
-                'confirm_password' => 'required|string|min:8|same:password',
+                'password' => ['required', Password::defaults()],
+                'confirm_password' => ['required', 'string', 'same:password'],
                 'country_code' => 'required',
                 'contact_number' => 'required|numeric|digits_between:1,15',
                 'email' => 'required|string|email|max:255',
@@ -705,8 +706,8 @@ class AuthController extends Controller
             $request->validate([
                 'name' => 'required|string|max:255',
                 'email' => 'required|string|email|max:255|unique:stp_users,email',
-                'password' => 'required|string|min:8',
-                'confirm_password' => 'required|string|min:8|same:password',
+                'password' => ['required', Password::defaults()],
+                'confirm_password' => ['required', 'string', 'same:password'],
                 'country_code' => 'required',
                 'contact_number' => 'required|numeric|digits_between:1,15',
             ]);

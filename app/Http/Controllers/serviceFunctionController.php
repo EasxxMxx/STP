@@ -20,6 +20,8 @@ use App\Models\User;
 use Exception;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\Rules\Password;
 
 
 class serviceFunctionController extends Controller
@@ -167,10 +169,20 @@ class serviceFunctionController extends Controller
             $getOtp->update([
                 'otp_status' => 0
             ]);
+
+            $resetToken = Str::random(64);
+            $resetTokenKey = $this->passwordResetTokenKey(
+                $request->type,
+                $request->email,
+                $resetToken
+            );
+            Cache::put($resetTokenKey, true, now()->addMinutes(10));
+
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'message' => "correct OTP"
+                    'message' => "correct OTP",
+                    'resetToken' => $resetToken
                 ]
             ]);
         } catch (ValidationException $e) {
@@ -193,9 +205,10 @@ class serviceFunctionController extends Controller
         try {
             $request->validate([
                 'email' => 'required|email',
-                'newPassword' => 'required|min:8',
-                'confirmPassword' => 'required|same:newPassword',
-                'type' => 'required|string'
+                'newPassword' => ['required', Password::defaults()],
+                'confirmPassword' => ['required', 'string', 'same:newPassword'],
+                'type' => 'required|string',
+                'resetToken' => 'required|string|size:64'
             ]);
 
             if ($request->type != 'admin' && $request->type != 'student' && $request->type != 'school') {
@@ -204,24 +217,40 @@ class serviceFunctionController extends Controller
                 ]);
             }
 
+            $resetTokenKey = $this->passwordResetTokenKey(
+                $request->type,
+                $request->email,
+                $request->resetToken
+            );
+
+            if (!Cache::pull($resetTokenKey)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Your password reset session is invalid or expired. Please request a new OTP.'
+                ], 403);
+            }
+
             switch ($request->type) {
                 case 'student':
                     $user = stp_student::where('student_email', $request->email)->first();
-                    $password = $user->student_password;
                     $passwordType = "student_password";
                     break;
                 case 'school':
                     $user = stp_school::where('school_email', $request->email)->first();
-                    $password = $user->school_password;
                     $passwordType = "school_password";
 
                     break;
                 case 'admin':
                     $user = User::where('email', $request->email)->first();
-                    $password = $user->password;
                     $passwordType = "password";
 
                     break;
+            }
+
+            if (!$user) {
+                throw ValidationException::withMessages([
+                    'email' => ['No active account was found for this email address.']
+                ]);
             }
 
             $user->update([
@@ -240,14 +269,19 @@ class serviceFunctionController extends Controller
                 'success' => false,
                 'message' => 'Validation Error',
                 'error' => $e->errors()
-            ]);
+            ], 422);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Internal Server Error',
                 'error' => $e->getMessage()
-            ]);
+            ], 500);
         }
+    }
+
+    private function passwordResetTokenKey(string $type, string $email, string $token): string
+    {
+        return 'password_reset:' . hash('sha256', $type . '|' . strtolower(trim($email)) . '|' . $token);
     }
 
     public function sendSchoolEmail($courseID, $student, $newApplicantId)

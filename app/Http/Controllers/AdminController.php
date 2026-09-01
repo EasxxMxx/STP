@@ -17,6 +17,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use App\Models\stp_student;
 use App\Services\ServiceFunction;
+use Illuminate\Validation\Rules\Password;
 
 use App\Models\stp_country;
 use App\Models\stp_course;
@@ -360,8 +361,8 @@ class AdminController extends Controller
                 'country' => 'integer',
                 'email' => 'required|string|email|max:255',
                 'state' => 'integer',
-                'password' => 'required|string|min:8',
-                'confirm_password' => 'required|string|min:8|same:password',
+                'password' => ['required', Password::defaults()],
+                'confirm_password' => ['required', 'string', 'same:password'],
                 'city' => 'integer',
 
             ]);
@@ -643,8 +644,8 @@ class AdminController extends Controller
                 'gender' => 'nullable|integer',
                 'postcode' => 'nullable|string',
                 'ic' => 'nullable|string|min:6',
-                'password' => 'nullable|string|min:8|nullable', // Allow password to be nullable
-                'confirm_password' => 'nullable|string|min:8|nullable|same:password', // Allow confirm_password to be nullable
+                'password' => ['nullable', Password::defaults()],
+                'confirm_password' => ['nullable', 'string', 'same:password'],
                 'country_code' => 'nullable|integer',
                 'contact_number' => 'nullable|numeric|digits_between:1,15',
                 'email' => 'required|string|email|max:255',
@@ -961,8 +962,8 @@ class AdminController extends Controller
         try {
             $request->validate([
                 'name' => 'required|string|max:255',
-                'password' => 'required|string|min:8',
-                'confirm_password' => 'required|string|min:8|same:password',
+                'password' => ['required', Password::defaults()],
+                'confirm_password' => ['required', 'string', 'same:password'],
                 'country_code' => 'required',
                 'contact_number' => 'required|numeric|digits_between:1,15',
                 'email' => 'required|string|email|max:255',
@@ -3648,9 +3649,9 @@ class AdminController extends Controller
     {
         try {
             $request->validate([
-                'currentPassword' => 'required|string|min:8',
-                'newPassword' => 'required|string|min:8',
-                'confirmPassword' => 'required|string|min:8|same:newPassword'
+                'currentPassword' => ['required', 'string'],
+                'newPassword' => ['required', Password::defaults(), 'different:currentPassword'],
+                'confirmPassword' => ['required', 'string', 'same:newPassword']
             ]);
             $authUser = Auth::user();
             if (!Hash::check($request->currentPassword, $authUser->password)) {
@@ -4767,9 +4768,9 @@ class AdminController extends Controller
             if ($authUser->status == 3) {
                 // Force user to reset password
                 $request->validate([
-                    'currentPassword' => 'required|string|min:8',
-                    'newPassword' => 'required|string|min:8',
-                    'confirmPassword' => 'required|string|min:8|same:newPassword'
+                    'currentPassword' => ['required', 'string'],
+                    'newPassword' => ['required', Password::defaults(), 'different:currentPassword'],
+                    'confirmPassword' => ['required', 'string', 'same:newPassword']
                 ]);
 
                 if (!Hash::check($request->currentPassword, $authUser->password)) {
@@ -5027,7 +5028,7 @@ class AdminController extends Controller
                 'email' => 'string|max:255',
                 'country_code' => 'required|string|max:255',
                 'contact_no' => 'required|string|max:255',
-                'password' => 'required|string|max:255',
+                'password' => ['required', Password::defaults()],
                 // 'user_detailPostcode' => 'required|string|max:255',
                 // 'user_detailCountry' => 'required|string|max:255',
                 // 'user_detailCity' => 'required|string|max:255',
@@ -5125,7 +5126,7 @@ class AdminController extends Controller
                 'ic_number' => 'nullable|string',
                 'country_code' => 'required|string|max:255',
                 'contact_no' => 'required|string|max:255',
-                'password' => 'nullable|string|max:255', // Make password nullable for edits
+                'password' => ['nullable', Password::defaults()],
                 // 'user_detailPostcode' => 'required|string|max:255',
                 // 'user_detailCountry' => 'required|string|max:255',
                 // 'user_detailCity' => 'required|string|max:255',

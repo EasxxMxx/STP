@@ -25,6 +25,7 @@ use App\Models\stp_tag;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules\Password;
 use Intervention\Image\Facades\Image as Image;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
@@ -1020,9 +1021,9 @@ class SchoolController extends Controller
     {
         try {
             $request->validate([
-                'currentPassword' => 'required|string|min:8',
-                'newPassword' => 'required|string|min:8',
-                'confirmPassword' => 'required|string|min:8|same:newPassword'
+                'currentPassword' => ['required', 'string'],
+                'newPassword' => ['required', Password::defaults(), 'different:currentPassword'],
+                'confirmPassword' => ['required', 'string', 'same:newPassword']
             ]);
             $authUser = Auth::user();
             if (!Hash::check($request->currentPassword, $authUser->school_password)) {
@@ -1347,8 +1348,8 @@ class SchoolController extends Controller
         try {
             $request->validate([
                 'id' => 'required|integer',
-                'newPassword' => 'required|string|min:8',
-                'confirmPassword' => 'required|string|min:8'
+                'newPassword' => ['required', Password::defaults()],
+                'confirmPassword' => ['required', 'string', 'same:newPassword']
             ]);
 
             $findSchool = stp_school::find($request->id);

@@ -1911,7 +1911,9 @@ class studentController extends Controller
             $authUser = Auth::user();
             $data = $request->data;
 
-            $existData = stp_higher_transcript::where('category_id', $request->category)->get();
+            $existData = stp_higher_transcript::where('category_id', $request->category)
+                ->where('student_id', $authUser->id)
+                ->get();
             $existName = $existData->map(function ($test) {
                 return $test->highTranscript_name;
             });
@@ -1922,6 +1924,8 @@ class studentController extends Controller
             if (count($missingItemsValue) > 0) {
                 foreach ($missingItemsValue as $removeData) {
                     stp_higher_transcript::where('highTranscript_name', $removeData)
+                        ->where('category_id', $request->category)
+                        ->where('student_id', $authUser->id)
                         ->where('highTranscript_status', 1)
                         ->update([
                             'highTranscript_status' => 0,
